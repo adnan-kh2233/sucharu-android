@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "68361915383",
+    "project_id": "sucharu-87667",
+    "storage_bucket": "sucharu-87667.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:68361915383:android:3befa5a23748094246bcf2",
+        "android_client_info": {
+          "package_name": "com.example.sucharu"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC9C8_ya0f-m9gfq0gHGp5nLjIV8q8RWv4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

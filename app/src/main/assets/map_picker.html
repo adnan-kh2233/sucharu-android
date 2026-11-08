@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    html,body,#map{height:100%;width:100%;margin:0;font-family:Arial,sans-serif}html,body{overflow:hidden}#map{background:#edf3ed}.leaflet-control-attribution{font-size:10px!important}
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const defaultPoint=[22.8456,89.5403];
+    const map=L.map('map',{zoomControl:true}).setView(defaultPoint,15);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(map);
+    const marker=L.marker(defaultPoint,{draggable:true}).addTo(map);
+    map.on('click',e=>marker.setLatLng(e.latlng));
+    function setInitialPin(lat,lon){if(Number.isFinite(lat)&&Number.isFinite(lon)){const point=[lat,lon];marker.setLatLng(point);map.setView(point,17)}}
+    function selectedPin(){const p=marker.getLatLng();return JSON.stringify({latitude:p.lat,longitude:p.lng})}
+    function invalidateMap(){map.invalidateSize(true)}
+  </script>
+</body>
+</html>

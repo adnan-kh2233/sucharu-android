@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/brand_cream"
+    android:orientation="vertical">
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="?attr/actionBarSize"
+        android:background="@color/brand_surface"
+        android:elevation="0dp"
+        app:title="সুচারু"
+        app:titleTextColor="@color/brand_green"
+        app:titleTextAppearance="@style/TextAppearance.MaterialComponents.Headline6"
+        app:logo="@mipmap/ic_launcher_round"
+        app:contentInsetStartWithNavigation="12dp"
+        app:navigationIcon="@drawable/ic_menu"
+        app:navigationContentDescription="Open app menu" />
+    <FrameLayout
+        android:id="@+id/content_frame"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+    <com.google.android.material.bottomnavigation.BottomNavigationView
+        android:id="@+id/bottom_navigation"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/brand_surface"
+        app:itemIconTint="@color/brand_nav"
+        app:itemTextColor="@color/brand_nav"
+        app:itemRippleColor="@color/brand_soft_green"
+        app:elevation="8dp"
+        app:labelVisibilityMode="labeled"
+        app:menu="@menu/menu_customer_bottom" />
+</LinearLayout>

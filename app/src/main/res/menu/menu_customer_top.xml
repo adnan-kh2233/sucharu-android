@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@+id/top_home" android:title="Home" />
+    <item android:id="@+id/top_services" android:title="Services" />
+    <item android:id="@+id/top_pricing" android:title="Pricing &amp; payments" />
+    <item android:id="@+id/top_track_booking" android:title="Track a booking" />
+    <item android:id="@+id/top_bookings" android:title="My bookings" />
+    <item android:id="@+id/top_account" android:title="My account" />
+</menu>

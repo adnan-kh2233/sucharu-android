@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/bookings_scroll"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/brand_cream"
+    android:fillViewport="true">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="16dp">
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:letterSpacing="0.12" android:text="YOUR SUCHARU ACCOUNT" android:textColor="@color/brand_green" android:textSize="11sp" android:textStyle="bold" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:text="My bookings" android:textColor="@color/brand_ink" android:textSize="24sp" android:textStyle="bold" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="3dp" android:text="Track progress and revisit your service requests." android:textColor="@color/brand_muted" android:textSize="14sp" />
+        <Button android:id="@+id/refresh_bookings" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="end" android:layout_marginTop="4dp" android:text="Refresh" />
+        <TextView android:id="@+id/bookings_status" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:textColor="@color/brand_muted" android:textSize="13sp" />
+        <LinearLayout android:id="@+id/bookings_list" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
+
+        <com.google.android.material.card.MaterialCardView android:id="@+id/track_booking_card" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="18dp" app:cardBackgroundColor="@color/brand_surface" app:cardCornerRadius="16dp" app:cardElevation="0dp" app:strokeColor="@color/brand_line" app:strokeWidth="1dp" xmlns:app="http://schemas.android.com/apk/res-auto">
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="16dp">
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Track a booking" android:textColor="@color/brand_ink" android:textSize="17sp" android:textStyle="bold" />
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:text="Booking ID ও request-এ দেওয়া phone number দিন।" android:textColor="@color/brand_muted" android:textSize="13sp" />
+                <EditText android:id="@+id/track_booking_id" android:layout_width="match_parent" android:layout_height="48dp" android:layout_marginTop="10dp" android:background="@drawable/bg_input" android:hint="SU-YYYYMMDD-ABC123" android:inputType="textCapCharacters" android:paddingHorizontal="12dp" android:singleLine="true" android:textColor="@color/brand_ink" android:textColorHint="@color/brand_muted" />
+                <EditText android:id="@+id/track_phone" android:layout_width="match_parent" android:layout_height="48dp" android:layout_marginTop="8dp" android:background="@drawable/bg_input" android:hint="01XXXXXXXXX" android:inputType="phone" android:paddingHorizontal="12dp" android:singleLine="true" android:textColor="@color/brand_ink" android:textColorHint="@color/brand_muted" />
+                <Button android:id="@+id/track_button" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="Check status" />
+                <TextView android:id="@+id/track_result" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:textColor="@color/brand_green" android:textSize="14sp" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+    </LinearLayout>
+</ScrollView>
