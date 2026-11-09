@@ -227,11 +227,101 @@ public class StaffPortalActivity extends AppCompatActivity {
         section.addView(text("Loading partners…", 14, MUTED, false));
         ApiClient.get("/partners", token, (status, object, rows, error) -> {
             if (!ready(error)) return; section.removeAllViews();
-            if (rows == null || rows.length() == 0) { section.addView(text("No partners yet.", 14, MUTED, false)); return; }
+            section.addView(primaryButton("+ Add a partner", v -> showAddPartnerDialog()), marginTop(6));
+            if (rows == null || rows.length() == 0) { section.addView(text("No partners yet. Add a partner to start assigning work.", 14, MUTED, false), marginTop(12)); return; }
             for (int i = 0; i < rows.length(); i++) { JSONObject p = rows.optJSONObject(i); if (p == null) continue;
-                addInfoCard(p.optString("name") + " · " + p.optString("partnerId"), p.optString("phone") + "\n" + p.optString("verificationStatus") + " · " + p.optString("status") + "\n" + p.optJSONArray("category"));
+                addAdminPartner(p);
             }
         });
+    }
+
+    private void showAddPartnerDialog() {
+        LinearLayout form = new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL); form.setPadding(dp(8), dp(2), dp(8), dp(2));
+        EditText name = input("Partner full name", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+        EditText phone = input("Bangladesh phone number", InputType.TYPE_CLASS_PHONE);
+        EditText categories = input("Service categories, comma separated", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        EditText areas = input("Service areas, comma separated (optional)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        form.addView(label("Name")); form.addView(name);
+        form.addView(label("Phone")); form.addView(phone);
+        form.addView(label("Can handle these categories")); form.addView(categories);
+        form.addView(label("Coverage areas")); form.addView(areas);
+        new MaterialAlertDialogBuilder(this).setTitle("Add partner")
+                .setMessage("The new partner starts pending and cannot sign in until Sucharu verifies and activates them.")
+                .setView(form).setNegativeButton("Cancel", null)
+                .setPositiveButton("Create partner", (dialog, which) -> {
+                    String partnerName = name.getText().toString().trim(), partnerPhone = phone.getText().toString().trim();
+                    JSONArray categoryList = commaSeparated(categories.getText().toString());
+                    JSONArray areaList = commaSeparated(areas.getText().toString());
+                    if (partnerName.isEmpty() || partnerPhone.isEmpty() || categoryList.length() == 0) { toast("Enter a name, phone number and at least one service category."); return; }
+                    JSONObject body = new JSONObject();
+                    try { body.put("name", partnerName); body.put("phone", partnerPhone); body.put("category", categoryList); body.put("area", areaList); }
+                    catch (Exception ignored) { }
+                    ApiClient.post("/partners", body, token, (code, result, array, error) -> {
+                        if (!ready(error)) return;
+                        toast("Partner created. Verify and activate them, then set their portal password.");
+                        loadAdminPartners();
+                    });
+                }).show();
+    }
+
+    private JSONArray commaSeparated(String input) {
+        JSONArray values = new JSONArray();
+        for (String value : input.split(",")) { String trimmed = value.trim(); if (!trimmed.isEmpty()) values.put(trimmed); }
+        return values;
+    }
+
+    private void addAdminPartner(JSONObject partner) {
+        MaterialCardView card = card(); LinearLayout content = cardContent(card);
+        String id = partner.optString("_id"), verification = partner.optString("verificationStatus"), status = partner.optString("status");
+        JSONArray categories = partner.optJSONArray("category"), areas = partner.optJSONArray("area");
+        content.addView(text(partner.optString("name") + " · " + partner.optString("partnerId"), 16, INK, true));
+        content.addView(text(partner.optString("phone") + "\nVerification: " + verification.replace('_', ' ')
+                + " · Status: " + status.replace('_', ' ')
+                + "\nCategories: " + (categories == null ? "-" : categories.toString())
+                + "\nAreas: " + (areas == null || areas.length() == 0 ? "All configured areas" : areas.toString())
+                + "\nPortal access: " + (partner.optBoolean("portalEnabled") ? "enabled" : "not enabled"), 13, MUTED, false), marginTop(6));
+
+        if (!"verified".equals(verification)) {
+            addButton(content, "Verify partner", v -> {
+                JSONObject body = new JSONObject(); try { body.put("verificationStatus", "verified"); body.put("status", status); } catch (Exception ignored) { }
+                patchPartner(id, body, "Partner verified.");
+            }, false);
+        }
+        if ("verified".equals(verification) && !"active".equals(status)) {
+            addButton(content, "Activate partner", v -> {
+                JSONObject body = new JSONObject(); try { body.put("verificationStatus", "verified"); body.put("status", "active"); } catch (Exception ignored) { }
+                patchPartner(id, body, "Partner activated and can be assigned work.");
+            }, false);
+        }
+        if ("verified".equals(verification) && "active".equals(status)) {
+            addButton(content, partner.optBoolean("portalEnabled") ? "Reset partner password" : "Set partner login password", v -> showPartnerPasswordDialog(partner), false);
+        }
+        section.addView(card, marginTop(10));
+    }
+
+    private void patchPartner(String id, JSONObject body, String successMessage) {
+        ApiClient.patch("/partners/" + encode(id), body, token, (code, result, rows, error) -> {
+            if (!ready(error)) return;
+            toast(successMessage);
+            loadAdminPartners();
+        });
+    }
+
+    private void showPartnerPasswordDialog(JSONObject partner) {
+        EditText password = input("Initial password (at least 12 characters)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+        new MaterialAlertDialogBuilder(this).setTitle("Enable partner sign in")
+                .setMessage("Give this password to the partner directly after saving. It is stored as a hash and cannot be viewed again here.")
+                .setView(password).setNegativeButton("Cancel", null)
+                .setPositiveButton("Save and enable login", (dialog, which) -> {
+                    String value = password.getText().toString();
+                    if (value.length() < 12) { toast("Partner passwords must be at least 12 characters."); return; }
+                    JSONObject body = new JSONObject(); try { body.put("password", value); } catch (Exception ignored) { }
+                    ApiClient.patch("/partners/" + encode(partner.optString("_id")) + "/portal-access", body, token, (code, result, rows, error) -> {
+                        if (!ready(error)) return;
+                        toast("Partner login enabled. Share the password with them privately.");
+                        loadAdminPartners();
+                    });
+                }).show();
     }
 
     private void loadAdminServices() {
