@@ -180,6 +180,14 @@ public class BookingsFragment extends Fragment {
             report.setOnClickListener(v -> showCompletionReport(row));
             content.addView(report, topMargin(4));
         }
+        JSONObject invoice = row.optJSONObject("invoice");
+        if (invoice != null) {
+            Button receipt = new Button(requireContext());
+            receipt.setAllCaps(false);
+            receipt.setText("paid".equals(row.optString("paymentStatus")) ? "View payment receipt" : "View invoice");
+            receipt.setOnClickListener(v -> showInvoice(row, invoice));
+            content.addView(receipt, topMargin(4));
+        }
         if (canCustomerManage(bookingStatus)) {
             Button manage = new Button(requireContext()); manage.setText("Change date or cancel"); manage.setAllCaps(false);
             manage.setOnClickListener(v -> showManageBooking(row)); content.addView(manage, topMargin(4));
@@ -192,6 +200,27 @@ public class BookingsFragment extends Fragment {
             content.addView(Ui.text(requireContext(), "Your rating · " + review.optInt("rating") + "/5" + (review.optString("comment").isEmpty() ? "" : "\n" + review.optString("comment")), 13, Ui.MUTED, false), topMargin(6));
         }
         return card;
+    }
+
+    private void showInvoice(JSONObject booking, JSONObject invoice) {
+        String paymentStatus = booking.optString("paymentStatus", "unpaid");
+        String method = booking.optString("paymentMethod", "").replace('_', ' ');
+        StringBuilder details = new StringBuilder()
+                .append("Booking · ").append(booking.optString("bookingId")).append("\n\n")
+                .append("Service charge     ৳").append(invoice.optLong("serviceCharge")).append("\n")
+                .append("Labor                    ৳").append(invoice.optLong("laborCharge")).append("\n")
+                .append("Materials              ৳").append(invoice.optLong("materialsCharge")).append("\n")
+                .append("Discount               − ৳").append(invoice.optLong("discount")).append("\n\n")
+                .append("TOTAL                    ৳").append(invoice.optLong("total")).append("\n")
+                .append("Payment · ").append("paid".equals(paymentStatus) ? "Paid" : "Payment pending");
+        if (!method.isEmpty()) details.append("\nMethod · ").append(method);
+        String note = invoice.optString("note", "");
+        if (!note.isEmpty()) details.append("\n\nNote\n").append(note);
+        new MaterialAlertDialogBuilder(requireContext())
+                .setTitle("paid".equals(paymentStatus) ? "Payment receipt" : "Service invoice")
+                .setMessage(details.toString())
+                .setPositiveButton("Done", null)
+                .show();
     }
 
     private void showPartnerTracker(String bookingId) {

@@ -395,8 +395,51 @@ public class StaffPortalActivity extends AppCompatActivity {
             JSONObject body = new JSONObject(); try { body.put("status", BOOKING_STATUSES[statusPicker.getSelectedItemPosition()]); } catch (Exception ignored) { }
             ApiClient.patch("/bookings/" + encode(bookingId) + "/status", body, token, (code, result, array, err) -> { if (ready(err)) loadAdminBookings(); });
         }, false);
+        if ("completed".equals(booking.optString("status"))) {
+            JSONObject invoice = booking.optJSONObject("invoice");
+            addButton(content, invoice == null ? "Create customer invoice" : "Edit customer invoice", v -> showAdminInvoiceDialog(booking), false);
+            if (invoice != null) content.addView(text("Invoice total · ৳" + invoice.optLong("total") + " · " + booking.optString("paymentStatus", "unpaid"), 12, MUTED, false), marginTop(4));
+        } else {
+            content.addView(text("Customer invoice is available after the booking is completed.", 12, MUTED, false), marginTop(8));
+        }
         bookingCards.addView(card, marginTop(10));
     }
+
+    private void showAdminInvoiceDialog(JSONObject booking) {
+        JSONObject current = booking.optJSONObject("invoice"), service = booking.optJSONObject("service");
+        LinearLayout form = new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL);
+        int pad = Ui.dp(this, 20); form.setPadding(pad, pad / 2, pad, 0);
+        EditText serviceCharge = invoiceAmountField("Service charge", current == null ? (service == null ? 0 : service.optLong("estimatedPrice")) : current.optLong("serviceCharge"));
+        EditText laborCharge = invoiceAmountField("Labor charge", current == null ? 0 : current.optLong("laborCharge"));
+        EditText materialsCharge = invoiceAmountField("Materials charge", current == null ? 0 : current.optLong("materialsCharge"));
+        EditText discount = invoiceAmountField("Discount", current == null ? 0 : current.optLong("discount"));
+        EditText note = new EditText(this); note.setHint("Invoice note (optional)"); note.setText(current == null ? "" : current.optString("note"));
+        note.setMinLines(2); note.setMaxLines(3); form.addView(note, marginTop(6));
+        Spinner payment = new Spinner(this); String[] paymentOptions = {"unpaid", "paid"};
+        payment.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, paymentOptions));
+        if ("paid".equals(booking.optString("paymentStatus"))) payment.setSelection(1);
+        form.addView(label("Payment status"), marginTop(8)); form.addView(payment);
+        form.addView(serviceCharge, marginTop(5)); form.addView(laborCharge, marginTop(5)); form.addView(materialsCharge, marginTop(5)); form.addView(discount, marginTop(5));
+        new MaterialAlertDialogBuilder(this).setTitle("Customer invoice · BDT")
+                .setView(form).setNegativeButton("Cancel", null)
+                .setPositiveButton("Save invoice", (dialog, which) -> {
+                    JSONObject body = new JSONObject();
+                    try {
+                        body.put("serviceCharge", amountText(serviceCharge)); body.put("laborCharge", amountText(laborCharge));
+                        body.put("materialsCharge", amountText(materialsCharge)); body.put("discount", amountText(discount));
+                        body.put("note", note.getText().toString().trim()); body.put("paymentStatus", paymentOptions[payment.getSelectedItemPosition()]);
+                    } catch (Exception ignored) { }
+                    ApiClient.patch("/bookings/" + encode(booking.optString("bookingId")) + "/invoice", body, token, (code, result, rows, error) -> {
+                        if (ready(error)) { toast("Invoice saved and customer notified."); loadAdminBookings(); }
+                    });
+                }).show();
+    }
+
+    private EditText invoiceAmountField(String hint, long value) {
+        EditText field = new EditText(this); field.setHint(hint + " (৳)"); field.setInputType(InputType.TYPE_CLASS_NUMBER); field.setText(String.valueOf(Math.max(0, value))); return field;
+    }
+
+    private long amountText(EditText field) { try { return Long.parseLong(field.getText().toString().trim()); } catch (Exception ignored) { return 0; } }
 
     private boolean partnerMatchesBooking(JSONObject partner, JSONObject booking) {
         JSONObject service = booking.optJSONObject("service");
