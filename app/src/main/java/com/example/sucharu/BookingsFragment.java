@@ -205,6 +205,7 @@ public class BookingsFragment extends Fragment {
                 if (!dialog.isShowing() || !isAdded()) return;
                 ApiClient.get("/customers/bookings/" + encodePath(bookingId) + "/location", token, (code, object, rows, error) -> {
                     if (!dialog.isShowing() || !isAdded()) return;
+                    if (code == 409) { updateText.setText("Trip tracking has ended for this booking."); return; }
                     if (error != null || object == null) updateText.setText(error == null ? "Waiting for the partner to share their location…" : error);
                     else {
                         double latitude = object.optDouble("latitude", Double.NaN), longitude = object.optDouble("longitude", Double.NaN);
