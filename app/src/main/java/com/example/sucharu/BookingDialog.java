@@ -137,35 +137,63 @@ public final class BookingDialog {
                 Toast.makeText(context, "Could not prepare the request.", Toast.LENGTH_LONG).show();
                 return;
             }
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setText("Sending…");
-            CustomerSession.withToken(context, (token, tokenError) -> {
-                if (tokenError != null) {
-                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
-                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setText("Submit request");
-                    Toast.makeText(context, tokenError, Toast.LENGTH_LONG).show();
-                    return;
-                }
-                ApiClient.post("/bookings", body, token, (status, response, array, error) -> {
-                    if (status >= 200 && status < 300 && response != null) {
-                        String bookingId = response.optString("bookingId", "");
-                        dialog.dismiss();
-                        new MaterialAlertDialogBuilder(context)
-                                .setTitle("Request received")
-                                .setMessage("Booking ID: " + bookingId + "\n\nSucharu will confirm availability and the final price. Keep this booking ID to track your request.")
-                                .setPositiveButton("View my bookings", (d, which) -> onReceived.run())
-                                .setNegativeButton("Done", (d, which) -> onReceived.run())
-                                .show();
-                    } else {
-                        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
-                        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setText("Submit request");
-                        Toast.makeText(context, error == null ? "Booking request could not be sent." : error, Toast.LENGTH_LONG).show();
-                    }
-                });
-            });
+            String addressText = address.getText().toString().trim();
+            String landmarkText = landmark.getText().toString().trim();
+            boolean hasSavedPin = savedAddress[0] != null
+                    && !savedAddress[0].isNull("latitude") && !savedAddress[0].isNull("longitude")
+                    && savedAddress[0].optString("address").equals(addressText);
+            String review = "Service\n" + service.name + "\n\n"
+                    + "Schedule\n" + date.getText().toString() + " · " + time.getSelectedItem().toString() + "\n\n"
+                    + "Service area\n" + AREAS[area.getSelectedItemPosition()] + "\n\n"
+                    + "Address\n" + addressText
+                    + (landmarkText.isEmpty() ? "" : "\nNear " + landmarkText)
+                    + (hasSavedPin ? "\nMap pin included" : "") + "\n\n"
+                    + "Payment preference\n" + PAYMENTS[payment.getSelectedItemPosition()] + "\n\n"
+                    + "Estimate\n" + service.priceLabel() + "\nFinal price will be confirmed by Sucharu."
+                    + (note.getText().toString().trim().isEmpty() ? "" : "\n\nNote\n" + note.getText().toString().trim());
+            AlertDialog reviewDialog = new MaterialAlertDialogBuilder(context)
+                    .setTitle("Review your request")
+                    .setMessage(review)
+                    .setNegativeButton("Edit details", null)
+                    .setPositiveButton("Confirm request", null)
+                    .create();
+            reviewDialog.setOnShowListener(reviewShown -> reviewDialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(confirmView -> {
+                reviewDialog.dismiss();
+                submitRequest(context, dialog, body, onReceived);
+            }));
+            reviewDialog.show();
         }));
         dialog.show();
         dialog.getWindow().setLayout(ViewGroup.LayoutParams.MATCH_PARENT, (int) (context.getResources().getDisplayMetrics().heightPixels * 0.88));
+    }
+
+    private static void submitRequest(Context context, AlertDialog dialog, JSONObject body, Runnable onReceived) {
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setText("Sending…");
+        CustomerSession.withToken(context, (token, tokenError) -> {
+            if (tokenError != null) {
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setText("Submit request");
+                Toast.makeText(context, tokenError, Toast.LENGTH_LONG).show();
+                return;
+            }
+            ApiClient.post("/bookings", body, token, (status, response, array, error) -> {
+                if (status >= 200 && status < 300 && response != null) {
+                    String bookingId = response.optString("bookingId", "");
+                    dialog.dismiss();
+                    new MaterialAlertDialogBuilder(context)
+                            .setTitle("Request received")
+                            .setMessage("Booking ID: " + bookingId + "\n\nSucharu will confirm availability and the final price. Keep this booking ID to track your request.")
+                            .setPositiveButton("View my bookings", (d, which) -> onReceived.run())
+                            .setNegativeButton("Done", (d, which) -> onReceived.run())
+                            .show();
+                } else {
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setText("Submit request");
+                    Toast.makeText(context, error == null ? "Booking request could not be sent." : error, Toast.LENGTH_LONG).show();
+                }
+            });
+        });
     }
 
     private static EditText field(Context context, String hint, int inputType) {
