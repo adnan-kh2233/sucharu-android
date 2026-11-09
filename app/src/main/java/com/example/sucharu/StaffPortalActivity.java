@@ -23,6 +23,7 @@ import org.json.JSONObject;
 
 import java.net.URLEncoder;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 
 public class StaffPortalActivity extends AppCompatActivity {
@@ -236,22 +237,54 @@ public class StaffPortalActivity extends AppCompatActivity {
     }
 
     private void showAddPartnerDialog() {
+        ApiClient.get("/services", token, (status, object, rows, error) -> {
+            if (error != null && !ready(error)) return;
+            LinkedHashSet<String> categories = new LinkedHashSet<>();
+            if (rows != null) for (int i = 0; i < rows.length(); i++) {
+                JSONObject service = rows.optJSONObject(i);
+                if (service != null && service.optBoolean("active", true)) {
+                    String category = service.optString("category", "").trim();
+                    if (!category.isEmpty()) categories.add(category);
+                }
+            }
+            if (categories.isEmpty()) {
+                categories.add("Electrical"); categories.add("Plumbing"); categories.add("AC services"); categories.add("Cleaning");
+            }
+            buildAddPartnerDialog(new ArrayList<>(categories));
+        });
+    }
+
+    private void buildAddPartnerDialog(List<String> categoryOptions) {
         LinearLayout form = new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL); form.setPadding(dp(8), dp(2), dp(8), dp(2));
         EditText name = input("Partner full name", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
         EditText phone = input("Bangladesh phone number", InputType.TYPE_CLASS_PHONE);
-        EditText categories = input("Service categories, comma separated", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
-        EditText areas = input("Service areas, comma separated (optional)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        EditText customCategories = input("Other categories (comma separated)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        EditText customAreas = input("Other areas (comma separated)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        List<String> selectedCategories = new ArrayList<>(), selectedAreas = new ArrayList<>();
+        TextView selectedCategorySummary = text("No categories selected", 13, MUTED, false);
+        TextView selectedAreaSummary = text("No areas selected · applies to all areas", 13, MUTED, false);
         form.addView(label("Name")); form.addView(name);
         form.addView(label("Phone")); form.addView(phone);
-        form.addView(label("Can handle these categories")); form.addView(categories);
-        form.addView(label("Coverage areas")); form.addView(areas);
+        form.addView(label("Available service categories"));
+        form.addView(primaryButton("Choose categories", v -> choosePartnerOptions("Choose service categories", categoryOptions, selectedCategories, selectedCategorySummary, "No categories selected")));
+        form.addView(selectedCategorySummary, marginTop(4));
+        form.addView(label("Add a category manually (optional)")); form.addView(customCategories);
+
+        String[] areaLabels = {"Sonadanga", "Khulna Sadar", "Khalishpur", "Daulatpur", "Other Khulna City Corporation area"};
+        String[] areaValues = {"Sonadanga", "Khulna Sadar", "Khalishpur", "Daulatpur", "other-kcc"};
+        form.addView(label("Available coverage areas"));
+        form.addView(primaryButton("Choose areas", v -> choosePartnerOptions("Choose coverage areas", java.util.Arrays.asList(areaLabels), selectedAreas, selectedAreaSummary, "No areas selected · applies to all areas")));
+        form.addView(selectedAreaSummary, marginTop(4));
+        form.addView(label("Add an area manually (optional)")); form.addView(customAreas);
+        form.addView(text("Select one or more options, or type additional categories/areas above. If no coverage area is selected, the partner can be assigned to any configured area.", 12, MUTED, false), marginTop(8));
+        ScrollView formScroll = new ScrollView(this); formScroll.setFillViewport(false); formScroll.addView(form);
         new MaterialAlertDialogBuilder(this).setTitle("Add partner")
                 .setMessage("The new partner starts pending and cannot sign in until Sucharu verifies and activates them.")
-                .setView(form).setNegativeButton("Cancel", null)
+                .setView(formScroll).setNegativeButton("Cancel", null)
                 .setPositiveButton("Create partner", (dialog, which) -> {
                     String partnerName = name.getText().toString().trim(), partnerPhone = phone.getText().toString().trim();
-                    JSONArray categoryList = commaSeparated(categories.getText().toString());
-                    JSONArray areaList = commaSeparated(areas.getText().toString());
+                    JSONArray categoryList = combineValues(selectedCategories, customCategories.getText().toString());
+                    JSONArray areaList = combineValues(mapAreaLabels(selectedAreas, areaLabels, areaValues), customAreas.getText().toString());
                     if (partnerName.isEmpty() || partnerPhone.isEmpty() || categoryList.length() == 0) { toast("Enter a name, phone number and at least one service category."); return; }
                     JSONObject body = new JSONObject();
                     try { body.put("name", partnerName); body.put("phone", partnerPhone); body.put("category", categoryList); body.put("area", areaList); }
@@ -264,10 +297,33 @@ public class StaffPortalActivity extends AppCompatActivity {
                 }).show();
     }
 
-    private JSONArray commaSeparated(String input) {
-        JSONArray values = new JSONArray();
-        for (String value : input.split(",")) { String trimmed = value.trim(); if (!trimmed.isEmpty()) values.put(trimmed); }
-        return values;
+    private void choosePartnerOptions(String title, List<String> options, List<String> selected, TextView summary, String emptyText) {
+        CharSequence[] labels = options.toArray(new CharSequence[0]);
+        boolean[] checked = new boolean[options.size()];
+        for (int i = 0; i < options.size(); i++) checked[i] = selected.contains(options.get(i));
+        new MaterialAlertDialogBuilder(this).setTitle(title)
+                .setMultiChoiceItems(labels, checked, (dialog, which, isChecked) -> {
+                    String value = options.get(which);
+                    if (isChecked && !selected.contains(value)) selected.add(value);
+                    else if (!isChecked) selected.remove(value);
+                })
+                .setPositiveButton("Done", (dialog, which) -> summary.setText(selected.isEmpty() ? emptyText : android.text.TextUtils.join(", ", selected)))
+                .setNegativeButton("Cancel", null).show();
+    }
+
+    private List<String> mapAreaLabels(List<String> selected, String[] labels, String[] values) {
+        List<String> mapped = new ArrayList<>();
+        for (String value : selected) for (int i = 0; i < labels.length; i++) if (labels[i].equals(value)) mapped.add(values[i]);
+        return mapped;
+    }
+
+    private JSONArray combineValues(List<String> selected, String manual) {
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        for (String value : selected) if (value != null && !value.trim().isEmpty()) values.add(value.trim());
+        for (String value : manual.split(",")) if (!value.trim().isEmpty()) values.add(value.trim());
+        JSONArray result = new JSONArray();
+        for (String value : values) result.put(value);
+        return result;
     }
 
     private void addAdminPartner(JSONObject partner) {
