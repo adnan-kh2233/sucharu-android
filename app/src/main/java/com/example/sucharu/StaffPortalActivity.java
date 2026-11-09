@@ -1,6 +1,7 @@
 package com.example.sucharu;
 
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.Gravity;
@@ -14,6 +15,8 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 
 import com.google.android.material.card.MaterialCardView;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
@@ -22,6 +25,8 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.net.URLEncoder;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -32,9 +37,11 @@ public class StaffPortalActivity extends AppCompatActivity {
     private static final String[] BOOKING_STATUSES = {"booking_received", "confirmed", "assigned", "on_the_way", "service_started", "completed", "cancelled"};
     private String role, token, staffName;
     private LinearLayout page, section;
+    private ActivityResultLauncher<String> agreementSaveLauncher;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
+        agreementSaveLauncher = registerForActivityResult(new ActivityResultContracts.CreateDocument(), this::saveAgreementPdf);
         role = getIntent().getStringExtra(EXTRA_ROLE);
         if (!"admin".equals(role) && !"partner".equals(role)) role = "admin";
         getWindow().setStatusBarColor(Color.rgb(244, 247, 237));
@@ -229,11 +236,26 @@ public class StaffPortalActivity extends AppCompatActivity {
         ApiClient.get("/partners", token, (status, object, rows, error) -> {
             if (!ready(error)) return; section.removeAllViews();
             section.addView(primaryButton("+ Add a partner", v -> showAddPartnerDialog()), marginTop(6));
+            section.addView(primaryButton("Download offline partner agreement PDF", v -> agreementSaveLauncher.launch("Sucharu_Partner_Agreement_Form.pdf")), marginTop(6));
             if (rows == null || rows.length() == 0) { section.addView(text("No partners yet. Add a partner to start assigning work.", 14, MUTED, false), marginTop(12)); return; }
             for (int i = 0; i < rows.length(); i++) { JSONObject p = rows.optJSONObject(i); if (p == null) continue;
                 addAdminPartner(p);
             }
         });
+    }
+
+    private void saveAgreementPdf(Uri destination) {
+        if (destination == null) return;
+        try (InputStream input = getAssets().open("Sucharu_Partner_Agreement_Form.pdf");
+             OutputStream output = getContentResolver().openOutputStream(destination, "w")) {
+            if (output == null) { toast("Could not open the selected folder."); return; }
+            byte[] buffer = new byte[8192]; int count;
+            while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+            output.flush();
+            toast("Partner agreement PDF saved for offline use.");
+        } catch (Exception error) {
+            toast("Could not save the agreement PDF. Please choose another folder.");
+        }
     }
 
     private void showAddPartnerDialog() {
@@ -258,17 +280,60 @@ public class StaffPortalActivity extends AppCompatActivity {
         LinearLayout form = new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL); form.setPadding(dp(8), dp(2), dp(8), dp(2));
         EditText name = input("Partner full name", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
         EditText phone = input("Bangladesh phone number", InputType.TYPE_CLASS_PHONE);
+        EditText fatherName = input("Father's name (optional)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+        EditText motherName = input("Mother's name (optional)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+        EditText permanentAddress = input("Permanent address (optional)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        EditText occupation = input("Current occupation (optional)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        EditText monthlyIncome = input("Monthly income in BDT (optional)", InputType.TYPE_CLASS_NUMBER);
+        EditText nationality = input("Nationality (optional)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+        EditText facebook = input("Facebook profile/link (optional)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        EditText whatsapp = input("WhatsApp number (optional)", InputType.TYPE_CLASS_PHONE);
+        EditText email = input("Email (optional)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+        EditText nidNumber = input("NID number (optional)", InputType.TYPE_CLASS_TEXT);
         EditText customCategories = input("Other categories (comma separated)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        EditText customSkills = input("Other skills (comma separated)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         EditText customAreas = input("Other areas (comma separated)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
-        List<String> selectedCategories = new ArrayList<>(), selectedAreas = new ArrayList<>();
+        EditText customDays = input("Other available days (optional)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        EditText customTimes = input("Other available times (optional)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        List<String> selectedCategories = new ArrayList<>(), selectedAreas = new ArrayList<>(), selectedSkills = new ArrayList<>(), selectedDays = new ArrayList<>(), selectedTimes = new ArrayList<>();
         TextView selectedCategorySummary = text("No categories selected", 13, MUTED, false);
         TextView selectedAreaSummary = text("No areas selected · applies to all areas", 13, MUTED, false);
+        TextView selectedSkillSummary = text("No skills selected", 13, MUTED, false);
+        TextView selectedDaySummary = text("No availability days selected", 13, MUTED, false);
+        TextView selectedTimeSummary = text("No availability times selected", 13, MUTED, false);
         form.addView(label("Name")); form.addView(name);
         form.addView(label("Phone")); form.addView(phone);
         form.addView(label("Available service categories"));
         form.addView(primaryButton("Choose categories", v -> choosePartnerOptions("Choose service categories", categoryOptions, selectedCategories, selectedCategorySummary, "No categories selected")));
         form.addView(selectedCategorySummary, marginTop(4));
         form.addView(label("Add a category manually (optional)")); form.addView(customCategories);
+
+        form.addView(text("Additional partner information · all optional", 15, INK, true), marginTop(14));
+        form.addView(label("Father's name")); form.addView(fatherName);
+        form.addView(label("Mother's name")); form.addView(motherName);
+        form.addView(label("Permanent address")); form.addView(permanentAddress);
+        form.addView(label("Current occupation")); form.addView(occupation);
+        form.addView(label("Monthly income (BDT)")); form.addView(monthlyIncome);
+        form.addView(label("Nationality")); form.addView(nationality);
+        form.addView(label("Facebook profile/link")); form.addView(facebook);
+        form.addView(label("WhatsApp number")); form.addView(whatsapp);
+        form.addView(label("Email")); form.addView(email);
+        form.addView(label("NID number")); form.addView(nidNumber);
+
+        List<String> skillOptions = java.util.Arrays.asList("AC service", "Water tank cleaning", "Cleaning", "Shifting", "Sofa/carpet cleaning", "Plumbing", "Painting", "Electrical", "Other");
+        form.addView(label("Additional skills (optional)"));
+        form.addView(primaryButton("Choose skills", v -> choosePartnerOptions("Choose additional skills", skillOptions, selectedSkills, selectedSkillSummary, "No skills selected")));
+        form.addView(selectedSkillSummary, marginTop(4)); form.addView(customSkills);
+
+        List<String> dayOptions = java.util.Arrays.asList("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday");
+        form.addView(label("Available days (optional)"));
+        form.addView(primaryButton("Choose available days", v -> choosePartnerOptions("Choose available days", dayOptions, selectedDays, selectedDaySummary, "No availability days selected")));
+        form.addView(selectedDaySummary, marginTop(4)); form.addView(customDays);
+
+        List<String> timeOptions = java.util.Arrays.asList("Morning", "Noon", "Evening", "Night", "Any time");
+        form.addView(label("Available times (optional)"));
+        form.addView(primaryButton("Choose available times", v -> choosePartnerOptions("Choose available times", timeOptions, selectedTimes, selectedTimeSummary, "No availability times selected")));
+        form.addView(selectedTimeSummary, marginTop(4)); form.addView(customTimes);
 
         String[] areaLabels = {"Sonadanga", "Khulna Sadar", "Khalishpur", "Daulatpur", "Other Khulna City Corporation area"};
         String[] areaValues = {"Sonadanga", "Khulna Sadar", "Khalishpur", "Daulatpur", "other-kcc"};
@@ -285,9 +350,20 @@ public class StaffPortalActivity extends AppCompatActivity {
                     String partnerName = name.getText().toString().trim(), partnerPhone = phone.getText().toString().trim();
                     JSONArray categoryList = combineValues(selectedCategories, customCategories.getText().toString());
                     JSONArray areaList = combineValues(mapAreaLabels(selectedAreas, areaLabels, areaValues), customAreas.getText().toString());
+                    JSONArray skillList = combineValues(selectedSkills, customSkills.getText().toString());
+                    JSONArray dayList = combineValues(selectedDays, customDays.getText().toString());
+                    JSONArray timeList = combineValues(selectedTimes, customTimes.getText().toString());
                     if (partnerName.isEmpty() || partnerPhone.isEmpty() || categoryList.length() == 0) { toast("Enter a name, phone number and at least one service category."); return; }
                     JSONObject body = new JSONObject();
-                    try { body.put("name", partnerName); body.put("phone", partnerPhone); body.put("category", categoryList); body.put("area", areaList); }
+                    try {
+                        body.put("name", partnerName); body.put("phone", partnerPhone); body.put("category", categoryList); body.put("area", areaList);
+                        body.put("fatherName", fatherName.getText().toString().trim()); body.put("motherName", motherName.getText().toString().trim());
+                        body.put("permanentAddress", permanentAddress.getText().toString().trim()); body.put("occupation", occupation.getText().toString().trim());
+                        body.put("monthlyIncome", monthlyIncome.getText().toString().trim()); body.put("nationality", nationality.getText().toString().trim());
+                        body.put("facebook", facebook.getText().toString().trim()); body.put("whatsapp", whatsapp.getText().toString().trim());
+                        body.put("email", email.getText().toString().trim()); body.put("nidNumber", nidNumber.getText().toString().trim());
+                        body.put("skills", skillList); body.put("availableDays", dayList); body.put("availableTimes", timeList);
+                    }
                     catch (Exception ignored) { }
                     ApiClient.post("/partners", body, token, (code, result, array, error) -> {
                         if (!ready(error)) return;
@@ -336,6 +412,21 @@ public class StaffPortalActivity extends AppCompatActivity {
                 + "\nCategories: " + (categories == null ? "-" : categories.toString())
                 + "\nAreas: " + (areas == null || areas.length() == 0 ? "All configured areas" : areas.toString())
                 + "\nPortal access: " + (partner.optBoolean("portalEnabled") ? "enabled" : "not enabled"), 13, MUTED, false), marginTop(6));
+        StringBuilder details = new StringBuilder();
+        appendPartnerDetail(details, "Father", partner.optString("fatherName"));
+        appendPartnerDetail(details, "Mother", partner.optString("motherName"));
+        appendPartnerDetail(details, "Address", partner.optString("permanentAddress"));
+        appendPartnerDetail(details, "Occupation", partner.optString("occupation"));
+        if (partner.has("monthlyIncome") && !partner.isNull("monthlyIncome")) appendPartnerDetail(details, "Monthly income (BDT)", partner.optString("monthlyIncome"));
+        appendPartnerDetail(details, "Nationality", partner.optString("nationality"));
+        appendPartnerDetail(details, "Facebook", partner.optString("facebook"));
+        appendPartnerDetail(details, "WhatsApp", partner.optString("whatsapp"));
+        appendPartnerDetail(details, "Email", partner.optString("email"));
+        appendPartnerDetail(details, "NID", partner.optString("nidNumber"));
+        appendPartnerArrayDetail(details, "Additional skills", partner.optJSONArray("skills"));
+        appendPartnerArrayDetail(details, "Available days", partner.optJSONArray("availableDays"));
+        appendPartnerArrayDetail(details, "Available times", partner.optJSONArray("availableTimes"));
+        if (details.length() > 0) content.addView(text("Application details\n" + details, 13, MUTED, false), marginTop(8));
 
         if (!"verified".equals(verification)) {
             addButton(content, "Verify partner", v -> {
@@ -353,6 +444,17 @@ public class StaffPortalActivity extends AppCompatActivity {
             addButton(content, partner.optBoolean("portalEnabled") ? "Reset partner password" : "Set partner login password", v -> showPartnerPasswordDialog(partner), false);
         }
         section.addView(card, marginTop(10));
+    }
+
+    private void appendPartnerDetail(StringBuilder details, String label, String value) {
+        if (value != null && !value.trim().isEmpty()) {
+            if (details.length() > 0) details.append('\n');
+            details.append(label).append(": ").append(value.trim());
+        }
+    }
+
+    private void appendPartnerArrayDetail(StringBuilder details, String label, JSONArray values) {
+        if (values != null && values.length() > 0) appendPartnerDetail(details, label, values.toString());
     }
 
     private void patchPartner(String id, JSONObject body, String successMessage) {
