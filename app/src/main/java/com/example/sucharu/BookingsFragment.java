@@ -8,6 +8,7 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.ScrollView;
@@ -17,6 +18,7 @@ import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
 
 import com.google.android.material.card.MaterialCardView;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -25,6 +27,12 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 
 public class BookingsFragment extends Fragment {
+    private static final String[] PROGRESS_STATUSES = {
+            "booking_received", "confirmed", "assigned", "on_the_way", "service_started", "completed"
+    };
+    private static final String[] PROGRESS_LABELS = {
+            "Request received", "Confirmed", "Partner assigned", "Partner on the way", "Service started", "Completed"
+    };
     private TextView status, trackingResult;
     private LinearLayout list;
     private EditText bookingId, phone;
@@ -92,12 +100,107 @@ public class BookingsFragment extends Fragment {
         JSONObject schedule = row.optJSONObject("schedule");
         content.addView(Ui.text(requireContext(), (service == null ? "Service" : service.optString("name", "Service")), 17, Ui.INK, true));
         content.addView(Ui.text(requireContext(), "BOOKING  ·  " + row.optString("bookingId"), 11, Ui.GREEN, true), topMargin(5));
-        content.addView(Ui.text(requireContext(), statusLabel(row.optString("status")), 14, Ui.GREEN, true), topMargin(8));
+        String bookingStatus = row.optString("status", "booking_received");
+        TextView statusBadge = Ui.text(requireContext(), statusLabel(bookingStatus), 12,
+                "cancelled".equals(bookingStatus) ? Color.rgb(164, 55, 48) : Ui.GREEN, true);
+        statusBadge.setPadding(Ui.dp(requireContext(), 10), Ui.dp(requireContext(), 6), Ui.dp(requireContext(), 10), Ui.dp(requireContext(), 6));
+        statusBadge.setBackground(Ui.pill("cancelled".equals(bookingStatus) ? Color.rgb(252, 237, 234) : Ui.SOFT_GREEN, Ui.dp(requireContext(), 18)));
+        LinearLayout.LayoutParams badgeParams = new LinearLayout.LayoutParams(-2, -2);
+        badgeParams.topMargin = Ui.dp(requireContext(), 9);
+        content.addView(statusBadge, badgeParams);
+        if (!"cancelled".equals(bookingStatus)) content.addView(progressSummary(bookingStatus), topMargin(10));
         String date = schedule == null ? "" : schedule.optString("date", "");
         String time = schedule == null ? "" : schedule.optString("time", "");
         content.addView(Ui.text(requireContext(), date + (time.isEmpty() ? "" : " · " + time), 13, Ui.MUTED, false), topMargin(5));
         content.addView(Ui.text(requireContext(), row.optString("area", ""), 13, Ui.MUTED, false), topMargin(3));
+        TextView details = Ui.text(requireContext(), "View booking progress  ›", 13, Ui.GREEN, true);
+        details.setPadding(0, Ui.dp(requireContext(), 10), 0, Ui.dp(requireContext(), 2));
+        details.setOnClickListener(v -> showProgressTimeline(row));
+        content.addView(details);
         return card;
+    }
+
+    private View progressSummary(String bookingStatus) {
+        int step = statusIndex(bookingStatus);
+        LinearLayout summary = new LinearLayout(requireContext());
+        summary.setOrientation(LinearLayout.VERTICAL);
+
+        LinearLayout heading = new LinearLayout(requireContext());
+        heading.setOrientation(LinearLayout.HORIZONTAL);
+        TextView current = Ui.text(requireContext(), statusLabel(bookingStatus), 13, Ui.INK, true);
+        heading.addView(current, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView stepCount = Ui.text(requireContext(), "STEP " + (step + 1) + " OF " + PROGRESS_STATUSES.length, 10, Ui.MUTED, true);
+        heading.addView(stepCount);
+        summary.addView(heading);
+
+        ProgressBar progress = new ProgressBar(requireContext(), null, android.R.attr.progressBarStyleHorizontal);
+        progress.setMax(PROGRESS_STATUSES.length * 100);
+        progress.setProgress((step + 1) * 100);
+        progress.setProgressTintList(android.content.res.ColorStateList.valueOf(Ui.GREEN));
+        progress.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(Ui.LINE));
+        LinearLayout.LayoutParams progressParams = new LinearLayout.LayoutParams(-1, Ui.dp(requireContext(), 6));
+        progressParams.topMargin = Ui.dp(requireContext(), 8);
+        summary.addView(progress, progressParams);
+        return summary;
+    }
+
+    private void showProgressTimeline(JSONObject row) {
+        String bookingStatus = row.optString("status", "booking_received");
+        LinearLayout timeline = new LinearLayout(requireContext());
+        timeline.setOrientation(LinearLayout.VERTICAL);
+        timeline.setPadding(Ui.dp(requireContext(), 8), Ui.dp(requireContext(), 4), Ui.dp(requireContext(), 8), Ui.dp(requireContext(), 4));
+
+        if ("cancelled".equals(bookingStatus)) {
+            timeline.addView(Ui.text(requireContext(), "This request was cancelled. Contact Sucharu if you need help or want to arrange another service.", 14, Ui.MUTED, false));
+        } else {
+            int activeStep = statusIndex(bookingStatus);
+            for (int i = 0; i < PROGRESS_LABELS.length; i++) {
+                LinearLayout rowLayout = new LinearLayout(requireContext());
+                rowLayout.setOrientation(LinearLayout.HORIZONTAL);
+                rowLayout.setGravity(android.view.Gravity.TOP);
+
+                LinearLayout markerColumn = new LinearLayout(requireContext());
+                markerColumn.setOrientation(LinearLayout.VERTICAL);
+                markerColumn.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+                TextView marker = Ui.text(requireContext(), i <= activeStep ? "●" : "○", 16,
+                        i <= activeStep ? Ui.GREEN : Ui.LINE, true);
+                marker.setGravity(android.view.Gravity.CENTER);
+                markerColumn.addView(marker, new LinearLayout.LayoutParams(Ui.dp(requireContext(), 24), Ui.dp(requireContext(), 24)));
+                if (i < PROGRESS_LABELS.length - 1) {
+                    View connector = new View(requireContext());
+                    connector.setBackgroundColor(i < activeStep ? Ui.GREEN : Ui.LINE);
+                    LinearLayout.LayoutParams connectorParams = new LinearLayout.LayoutParams(Ui.dp(requireContext(), 2), Ui.dp(requireContext(), 22));
+                    markerColumn.addView(connector, connectorParams);
+                }
+                rowLayout.addView(markerColumn);
+
+                LinearLayout labelColumn = new LinearLayout(requireContext());
+                labelColumn.setOrientation(LinearLayout.VERTICAL);
+                labelColumn.setPadding(Ui.dp(requireContext(), 10), Ui.dp(requireContext(), 2), 0, Ui.dp(requireContext(), 14));
+                labelColumn.addView(Ui.text(requireContext(), PROGRESS_LABELS[i], 14,
+                        i <= activeStep ? Ui.INK : Ui.MUTED, i == activeStep));
+                if (i == activeStep) labelColumn.addView(Ui.text(requireContext(), "Current update", 11, Ui.GREEN, false));
+                rowLayout.addView(labelColumn, new LinearLayout.LayoutParams(0, -2, 1));
+                timeline.addView(rowLayout);
+            }
+            String partnerName = row.optString("partnerName", "");
+            JSONObject partner = row.optJSONObject("partner");
+            if (partnerName.isEmpty() && partner != null) partnerName = partner.optString("name", "");
+            if (!partnerName.isEmpty()) timeline.addView(Ui.text(requireContext(), "Service partner · " + partnerName, 13, Ui.MUTED, false));
+        }
+
+        ScrollView scroll = new ScrollView(requireContext());
+        scroll.addView(timeline);
+        new MaterialAlertDialogBuilder(requireContext())
+                .setTitle("Booking progress · " + row.optString("bookingId"))
+                .setView(scroll)
+                .setPositiveButton("Done", null)
+                .show();
+    }
+
+    private int statusIndex(String bookingStatus) {
+        for (int i = 0; i < PROGRESS_STATUSES.length; i++) if (PROGRESS_STATUSES[i].equals(bookingStatus)) return i;
+        return 0;
     }
 
     private LinearLayout.LayoutParams topMargin(int value) {
@@ -123,7 +226,8 @@ public class BookingsFragment extends Fragment {
                 result.append("\n").append(object.optString("area", ""));
                 String partner = object.optString("partnerName", "");
                 if (!partner.isEmpty()) result.append("\nPartner: ").append(partner);
-                trackingResult.setText(result.toString());
+                trackingResult.setText(result + "\n\nTap here to view the full progress timeline.");
+                trackingResult.setOnClickListener(v -> showProgressTimeline(object));
             });
         } catch (Exception exception) {
             Toast.makeText(requireContext(), "Could not prepare the booking lookup.", Toast.LENGTH_LONG).show();
