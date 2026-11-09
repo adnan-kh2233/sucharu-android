@@ -25,8 +25,11 @@ import android.widget.ScrollView;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.app.Dialog;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.view.Window;
 import android.view.WindowManager;
+import android.widget.ImageView;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -166,6 +169,16 @@ public class BookingsFragment extends Fragment {
             trackPartner.setAllCaps(false);
             trackPartner.setOnClickListener(v -> showPartnerTracker(row.optString("bookingId")));
             content.addView(trackPartner, topMargin(5));
+            Button startCode = new Button(requireContext());
+            startCode.setText("Show service start code");
+            startCode.setAllCaps(false);
+            startCode.setOnClickListener(v -> requestServiceStartCode(row.optString("bookingId")));
+            content.addView(startCode, topMargin(3));
+        }
+        if ("completed".equals(bookingStatus) && row.optBoolean("completionProofPresent")) {
+            Button report = new Button(requireContext()); report.setText("View service report"); report.setAllCaps(false);
+            report.setOnClickListener(v -> showCompletionReport(row.optString("bookingId")));
+            content.addView(report, topMargin(4));
         }
         if (canCustomerManage(bookingStatus)) {
             Button manage = new Button(requireContext()); manage.setText("Change date or cancel"); manage.setAllCaps(false);
@@ -233,6 +246,66 @@ public class BookingsFragment extends Fragment {
     private String encodePath(String value) {
         try { return java.net.URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20"); }
         catch (Exception ignored) { return value; }
+    }
+
+    private void requestServiceStartCode(String bookingId) {
+        String key = "start_code_" + bookingId;
+        android.content.SharedPreferences cache = requireContext().getSharedPreferences("customer_start_codes", android.content.Context.MODE_PRIVATE);
+        String savedCode = cache.getString(key, "");
+        if (!savedCode.isEmpty() && cache.getLong(key + "_expires", 0) > System.currentTimeMillis()) { showServiceStartCode(bookingId, savedCode); return; }
+        CustomerSession.withToken(requireContext(), (token, tokenError) -> {
+            if (!isAdded()) return;
+            if (tokenError != null) { Toast.makeText(requireContext(), tokenError, Toast.LENGTH_LONG).show(); return; }
+            ApiClient.post("/customers/bookings/" + encodePath(bookingId) + "/start-code", new JSONObject(), token, (code, object, rows, error) -> {
+                if (!isAdded()) return;
+                if (error != null || object == null) { Toast.makeText(requireContext(), error == null ? "Could not generate the service code." : error, Toast.LENGTH_LONG).show(); return; }
+                String generated = object.optString("code", "");
+                if (generated.matches("\\d{6}")) cache.edit().putString(key, generated).putLong(key + "_expires", System.currentTimeMillis() + 15 * 60 * 1000L).apply();
+                showServiceStartCode(bookingId, generated);
+            });
+        });
+    }
+
+    private void showServiceStartCode(String bookingId, String code) {
+        TextView value = Ui.text(requireContext(), code, 34, Ui.GREEN, true); value.setGravity(android.view.Gravity.CENTER); value.setLetterSpacing(.25f);
+        LinearLayout content = new LinearLayout(requireContext()); content.setOrientation(LinearLayout.VERTICAL); content.setPadding(Ui.dp(requireContext(), 22), Ui.dp(requireContext(), 8), Ui.dp(requireContext(), 22), 0);
+        content.addView(value);
+        content.addView(Ui.text(requireContext(), "Share this one-time code only with your assigned partner after they arrive. It expires in 15 minutes.", 14, Ui.MUTED, false), topMargin(10));
+        new MaterialAlertDialogBuilder(requireContext()).setTitle("Service start code · " + bookingId).setView(content).setPositiveButton("Done", null).show();
+    }
+
+    private void showCompletionReport(String bookingId) {
+        CustomerSession.withToken(requireContext(), (token, tokenError) -> {
+            if (!isAdded()) return;
+            if (tokenError != null) { Toast.makeText(requireContext(), tokenError, Toast.LENGTH_LONG).show(); return; }
+            ApiClient.get("/customers/bookings/" + encodePath(bookingId) + "/completion-proof", token, (code, object, rows, error) -> {
+                if (!isAdded()) return;
+                if (error != null || object == null) { Toast.makeText(requireContext(), error == null ? "Could not load the service report." : error, Toast.LENGTH_LONG).show(); return; }
+                LinearLayout report = new LinearLayout(requireContext()); report.setOrientation(LinearLayout.VERTICAL); report.setPadding(Ui.dp(requireContext(), 20), 0, Ui.dp(requireContext(), 20), 0);
+                JSONObject checklist = object.optJSONObject("checklist");
+                report.addView(Ui.text(requireContext(), (checklist != null && checklist.optBoolean("workCompleted") ? "✓" : "○") + "  Work completed as agreed", 14, Ui.INK, false));
+                report.addView(Ui.text(requireContext(), (checklist != null && checklist.optBoolean("areaChecked") ? "✓" : "○") + "  Service area checked", 14, Ui.INK, false), topMargin(4));
+                report.addView(Ui.text(requireContext(), (checklist != null && checklist.optBoolean("followUpExplained") ? "✓" : "○") + "  Follow-up explained", 14, Ui.INK, false), topMargin(4));
+                String notes = object.optString("notes", "");
+                if (!notes.isEmpty()) report.addView(Ui.text(requireContext(), "Partner note\n" + notes, 14, Ui.MUTED, false), topMargin(10));
+                addProofImage(report, "Before service", object.optString("beforeImage", ""));
+                addProofImage(report, "After service", object.optString("afterImage", ""));
+                ScrollView scroll = new ScrollView(requireContext()); scroll.addView(report);
+                new MaterialAlertDialogBuilder(requireContext()).setTitle("Service report · " + bookingId).setView(scroll).setPositiveButton("Close", null).show();
+            });
+        });
+    }
+
+    private void addProofImage(LinearLayout parent, String heading, String encoded) {
+        if (encoded == null || encoded.isEmpty()) return;
+        try {
+            byte[] bytes = android.util.Base64.decode(encoded, android.util.Base64.DEFAULT);
+            Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+            if (bitmap == null) return;
+            parent.addView(Ui.text(requireContext(), heading, 13, Ui.GREEN, true), topMargin(12));
+            ImageView image = new ImageView(requireContext()); image.setImageBitmap(bitmap); image.setAdjustViewBounds(true); image.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, Ui.dp(requireContext(), 220)); params.topMargin = Ui.dp(requireContext(), 5); parent.addView(image, params);
+        } catch (Exception ignored) { }
     }
 
     private boolean canCustomerManage(String value) { return "booking_received".equals(value) || "confirmed".equals(value); }

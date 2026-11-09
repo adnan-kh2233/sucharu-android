@@ -5,6 +5,8 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
@@ -15,6 +17,7 @@ import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.ArrayAdapter;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -37,6 +40,7 @@ import org.json.JSONObject;
 import java.net.URLEncoder;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -50,7 +54,11 @@ public class StaffPortalActivity extends AppCompatActivity {
     private ActivityResultLauncher<String> agreementSaveLauncher;
     private ActivityResultLauncher<String> partnerNotificationPermission;
     private ActivityResultLauncher<String[]> partnerLocationPermission;
+    private ActivityResultLauncher<String> beforePhotoPicker;
+    private ActivityResultLauncher<String> afterPhotoPicker;
     private String pendingLocationBookingId;
+    private String pendingCompletionBookingId, completionBeforeImage, completionAfterImage;
+    private TextView beforePhotoStatus, afterPhotoStatus;
     private boolean partnerAssignmentReceiverRegistered;
     private final BroadcastReceiver partnerAssignmentReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
@@ -61,6 +69,8 @@ public class StaffPortalActivity extends AppCompatActivity {
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         agreementSaveLauncher = registerForActivityResult(new ActivityResultContracts.CreateDocument(), this::saveAgreementPdf);
+        beforePhotoPicker = registerForActivityResult(new ActivityResultContracts.GetContent(), uri -> handleCompletionPhoto(uri, true));
+        afterPhotoPicker = registerForActivityResult(new ActivityResultContracts.GetContent(), uri -> handleCompletionPhoto(uri, false));
         partnerNotificationPermission = registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
             if (granted) {
                 registerPartnerDeviceToken();
@@ -768,22 +778,140 @@ public class StaffPortalActivity extends AppCompatActivity {
                 + "\nAddress: " + job.optString("area") + ", " + job.optString("address")
                 + (job.optString("note").isEmpty() ? "" : "\nNote: " + job.optString("note")), 13, MUTED, false), marginTop(6));
         String next = "assigned".equals(status) ? "on_the_way" : "on_the_way".equals(status) ? "service_started" : "service_started".equals(status) ? "completed" : "";
-        String label = "on_the_way".equals(next) ? "Mark on the way" : "service_started".equals(next) ? "Start service" : "completed".equals(next) ? "Mark completed" : "Completed";
-        if (!next.isEmpty()) addButton(content, label, v -> {
+        if ("on_the_way".equals(status)) {
+            addButton(content, "Verify customer code & start service", v -> showPartnerStartServiceDialog(bookingId), false);
+        } else if ("service_started".equals(status)) {
+            addButton(content, "Submit completion report", v -> showCompletionReportDialog(bookingId), false);
+        } else if (!next.isEmpty()) {
+            String label = "Mark on the way";
+            addButton(content, label, v -> {
             JSONObject body = new JSONObject(); try { body.put("status", next); } catch (Exception ignored) { }
             ApiClient.patch("/partner/jobs/" + encode(bookingId) + "/status", body, token, (code, response, array, err) -> {
                 if (ready(err)) {
                     if ("on_the_way".equals(next)) requestPartnerLocationSharing(bookingId);
-                    else if ("service_started".equals(next) || "completed".equals(next)) stopPartnerLocationService();
                     loadPartnerJobs();
                 }
             });
-        }, false);
+            }, false);
+        }
         if ("on_the_way".equals(status) && !isLocationSharing(bookingId)) {
             addButton(content, "Start location sharing", v -> requestPartnerLocationSharing(bookingId), false);
             content.addView(text("The customer sees your last location only while you are on the way. You can stop sharing from the phone notification.", 12, MUTED, false), marginTop(5));
         }
         section.addView(card, marginTop(10));
+    }
+
+    private void showPartnerStartServiceDialog(String bookingId) {
+        EditText code = input("6-digit code from the customer", InputType.TYPE_CLASS_NUMBER);
+        code.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(6)});
+        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this).setTitle("Confirm service start")
+                .setMessage("Ask the customer to open their Sucharu app and show the code. Enter it here to start the job.")
+                .setView(code).setNegativeButton("Back", null).setPositiveButton("Verify & start", null);
+        androidx.appcompat.app.AlertDialog dialog = builder.create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String value = code.getText().toString().trim();
+            if (!value.matches("\\d{6}")) { code.setError("Enter all 6 digits."); return; }
+            try {
+                JSONObject body = new JSONObject(); body.put("code", value);
+                ApiClient.post("/partner/jobs/" + encode(bookingId) + "/start-service", body, token, (statusCode, response, rows, error) -> {
+                    if (error != null || statusCode < 200 || statusCode >= 300) { toast(error == null ? "Could not verify the customer code." : error); return; }
+                    dialog.dismiss(); stopPartnerLocationService(); toast("Customer code verified. Service started."); loadPartnerJobs();
+                });
+            } catch (Exception ignoredError) { toast("Could not prepare the service code."); }
+        }));
+        dialog.show();
+    }
+
+    private void showCompletionReportDialog(String bookingId) {
+        pendingCompletionBookingId = bookingId; completionBeforeImage = null; completionAfterImage = null;
+        CheckBox workCompleted = new CheckBox(this); workCompleted.setText("Work completed as agreed with the customer");
+        CheckBox areaChecked = new CheckBox(this); areaChecked.setText("Service area checked and left safely");
+        CheckBox followUpExplained = new CheckBox(this); followUpExplained.setText("Any follow-up or care advice explained");
+        EditText notes = input("Completion note for the customer (optional)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE); notes.setMinLines(2); notes.setMaxLines(4);
+        com.google.android.material.button.MaterialButton beforePhoto = new com.google.android.material.button.MaterialButton(this); beforePhoto.setText("Choose before photo (optional)"); beforePhoto.setAllCaps(false);
+        com.google.android.material.button.MaterialButton afterPhoto = new com.google.android.material.button.MaterialButton(this); afterPhoto.setText("Choose after photo (optional)"); afterPhoto.setAllCaps(false);
+        beforePhotoStatus = text("No before photo selected", 12, MUTED, false);
+        afterPhotoStatus = text("No after photo selected", 12, MUTED, false);
+        beforePhoto.setOnClickListener(v -> beforePhotoPicker.launch("image/*")); afterPhoto.setOnClickListener(v -> afterPhotoPicker.launch("image/*"));
+        LinearLayout form = new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL); form.setPadding(dp(18), 0, dp(18), 0);
+        form.addView(text("Confirm the service steps. Photos are optional; avoid faces and private documents.", 13, MUTED, false));
+        form.addView(workCompleted, marginTop(5)); form.addView(areaChecked, marginTop(2)); form.addView(followUpExplained, marginTop(2)); form.addView(notes, marginTop(6));
+        form.addView(beforePhoto, marginTop(8)); form.addView(beforePhotoStatus, marginTop(2)); form.addView(afterPhoto, marginTop(8)); form.addView(afterPhotoStatus, marginTop(2));
+        ScrollView scroll = new ScrollView(this); scroll.addView(form);
+        androidx.appcompat.app.AlertDialog dialog = new MaterialAlertDialogBuilder(this).setTitle("Service completion report").setView(scroll).setNegativeButton("Keep working", null).setPositiveButton("Complete booking", null).create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            if (!workCompleted.isChecked() || !areaChecked.isChecked() || !followUpExplained.isChecked()) { toast("Confirm all checklist items before completing the booking."); return; }
+            if ((beforePhotoStatus != null && beforePhotoStatus.getText().toString().startsWith("Preparing")) || (afterPhotoStatus != null && afterPhotoStatus.getText().toString().startsWith("Preparing"))) { toast("Wait for the selected photo to finish compressing."); return; }
+            JSONObject checklist = new JSONObject(), body = new JSONObject();
+            try {
+                checklist.put("workCompleted", true); checklist.put("areaChecked", true); checklist.put("followUpExplained", true);
+                body.put("checklist", checklist); body.put("notes", notes.getText().toString().trim());
+                body.put("beforeImage", completionBeforeImage == null ? JSONObject.NULL : completionBeforeImage);
+                body.put("afterImage", completionAfterImage == null ? JSONObject.NULL : completionAfterImage);
+            } catch (Exception ignoredError) { toast("Could not prepare the service report."); return; }
+            ApiClient.post("/partner/jobs/" + encode(bookingId) + "/complete", body, token, (statusCode, response, rows, error) -> {
+                if (error != null || statusCode < 200 || statusCode >= 300) { toast(error == null ? "Could not save the completion report." : error); return; }
+                dialog.dismiss(); completionBeforeImage = null; completionAfterImage = null; pendingCompletionBookingId = null; stopPartnerLocationService();
+                toast("Service report saved. Booking completed."); loadPartnerJobs();
+            });
+        }));
+        dialog.setOnDismissListener(ignored -> { beforePhotoStatus = null; afterPhotoStatus = null; });
+        dialog.show();
+    }
+
+    private void handleCompletionPhoto(Uri uri, boolean before) {
+        if (uri == null || pendingCompletionBookingId == null) return;
+        final String bookingId = pendingCompletionBookingId;
+        TextView target = before ? beforePhotoStatus : afterPhotoStatus;
+        if (target != null) target.setText("Preparing photo…");
+        new Thread(() -> {
+            String encoded = compressCompletionPhoto(uri);
+            runOnUiThread(() -> {
+                if (!bookingId.equals(pendingCompletionBookingId)) return;
+                if (encoded == null) {
+                    if (target != null) target.setText("Photo too large or unreadable. Choose another one.");
+                    return;
+                }
+                if (before) completionBeforeImage = encoded; else completionAfterImage = encoded;
+                if (target != null) target.setText("Photo ready · compressed for upload");
+            });
+        }, "sucharu-photo-compress").start();
+    }
+
+    private String compressCompletionPhoto(Uri uri) {
+        try {
+            BitmapFactory.Options bounds = new BitmapFactory.Options(); bounds.inJustDecodeBounds = true;
+            try (InputStream input = getContentResolver().openInputStream(uri)) { BitmapFactory.decodeStream(input, null, bounds); }
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null;
+            int sample = 1; while (bounds.outWidth / sample > 1280 || bounds.outHeight / sample > 1280) sample *= 2;
+            BitmapFactory.Options options = new BitmapFactory.Options(); options.inSampleSize = sample;
+            Bitmap bitmap;
+            try (InputStream input = getContentResolver().openInputStream(uri)) { bitmap = BitmapFactory.decodeStream(input, null, options); }
+            if (bitmap == null) return null;
+            int max = Math.max(bitmap.getWidth(), bitmap.getHeight());
+            if (max > 800) {
+                float scale = 800f / max;
+                Bitmap scaled = Bitmap.createScaledBitmap(bitmap, Math.round(bitmap.getWidth() * scale), Math.round(bitmap.getHeight() * scale), true);
+                if (scaled != bitmap) bitmap.recycle(); bitmap = scaled;
+            }
+            for (int maxDimension = 800; maxDimension >= 250; maxDimension = Math.round(maxDimension * .75f)) {
+                Bitmap working = bitmap;
+                int workingMax = Math.max(bitmap.getWidth(), bitmap.getHeight());
+                if (workingMax > maxDimension) {
+                    float scale = (float) maxDimension / workingMax;
+                    working = Bitmap.createScaledBitmap(bitmap, Math.round(bitmap.getWidth() * scale), Math.round(bitmap.getHeight() * scale), true);
+                }
+                for (int quality = 82; quality >= 40; quality -= 7) {
+                    ByteArrayOutputStream output = new ByteArrayOutputStream(); working.compress(Bitmap.CompressFormat.JPEG, quality, output);
+                    if (output.size() <= 150 * 1024) {
+                        String result = android.util.Base64.encodeToString(output.toByteArray(), android.util.Base64.NO_WRAP);
+                        if (working != bitmap) working.recycle(); bitmap.recycle(); return result;
+                    }
+                }
+                if (working != bitmap) working.recycle();
+            }
+            bitmap.recycle(); return null;
+        } catch (Exception ignored) { return null; }
     }
 
     private boolean isLocationSharing(String bookingId) {
