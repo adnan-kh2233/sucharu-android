@@ -38,6 +38,8 @@ import android.widget.ImageView;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.fragment.app.Fragment;
 import androidx.core.content.FileProvider;
 
@@ -51,6 +53,8 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -65,10 +69,33 @@ public class BookingsFragment extends Fragment {
     private LinearLayout list;
     private EditText bookingId, phone;
     private ScrollView bookingsScroll;
+    private ActivityResultLauncher<Intent> invoiceSaveLauncher;
+    private File pendingInvoicePdf;
     private boolean bookingUpdateReceiverRegistered;
     private final BroadcastReceiver bookingUpdateReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) { if (isAdded()) loadBookings(); }
     };
+
+    @Override public void onCreate(@Nullable Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        invoiceSaveLauncher = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
+            File source = pendingInvoicePdf; pendingInvoicePdf = null;
+            Uri uri = result.getResultCode() == android.app.Activity.RESULT_OK && result.getData() != null ? result.getData().getData() : null;
+            if (uri == null || source == null) return;
+            android.content.Context appContext = requireContext().getApplicationContext();
+            new Thread(() -> {
+                try (InputStream input = new java.io.FileInputStream(source); OutputStream output = appContext.getContentResolver().openOutputStream(uri)) {
+                    if (output == null) throw new java.io.IOException("Could not open the selected save location.");
+                    byte[] buffer = new byte[8192]; int count;
+                    while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+                    new Handler(Looper.getMainLooper()).post(() -> { if (isAdded()) Toast.makeText(requireContext(), "Invoice PDF saved.", Toast.LENGTH_SHORT).show(); });
+                } catch (Exception error) {
+                    String message = error.getMessage() == null ? "Could not save the PDF." : error.getMessage();
+                    new Handler(Looper.getMainLooper()).post(() -> { if (isAdded()) Toast.makeText(requireContext(), message, Toast.LENGTH_LONG).show(); });
+                }
+            }, "sucharu-save-invoice").start();
+        });
+    }
 
     @Nullable @Override public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
         return inflater.inflate(R.layout.fragment_bookings, container, false);
@@ -289,15 +316,28 @@ public class BookingsFragment extends Fragment {
             File readyFile = pdfFile;
             new Handler(Looper.getMainLooper()).post(() -> {
                 if (!isAdded()) return;
-                try {
-                    Uri uri = FileProvider.getUriForFile(requireContext(), requireContext().getPackageName() + ".fileprovider", readyFile);
-                    Intent share = new Intent(Intent.ACTION_SEND); share.setType("application/pdf");
-                    share.putExtra(Intent.EXTRA_STREAM, uri); share.setClipData(android.content.ClipData.newUri(requireContext().getContentResolver(), "Sucharu invoice", uri));
-                    share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                    startActivity(Intent.createChooser(share, paid ? "Share payment receipt" : "Share invoice PDF"));
-                } catch (Exception error) { Toast.makeText(requireContext(), "PDF created, but sharing could not start.", Toast.LENGTH_LONG).show(); }
+                new MaterialAlertDialogBuilder(requireContext())
+                        .setTitle(paid ? "Payment receipt PDF" : "Invoice PDF")
+                        .setItems(new String[]{"Save PDF to device", "Share PDF"}, (dialog, choice) -> {
+                            if (choice == 0) {
+                                pendingInvoicePdf = readyFile;
+                                Intent save = new Intent(Intent.ACTION_CREATE_DOCUMENT); save.addCategory(Intent.CATEGORY_OPENABLE);
+                                save.setType("application/pdf"); save.putExtra(Intent.EXTRA_TITLE, readyFile.getName()); invoiceSaveLauncher.launch(save);
+                            }
+                            else shareInvoicePdf(readyFile, paid);
+                        }).setNegativeButton("Cancel", null).show();
             });
         }, "sucharu-invoice-pdf").start();
+    }
+
+    private void shareInvoicePdf(File file, boolean paid) {
+        try {
+            Uri uri = FileProvider.getUriForFile(requireContext(), requireContext().getPackageName() + ".fileprovider", file);
+            Intent share = new Intent(Intent.ACTION_SEND); share.setType("application/pdf");
+            share.putExtra(Intent.EXTRA_STREAM, uri); share.setClipData(android.content.ClipData.newUri(requireContext().getContentResolver(), "Sucharu invoice", uri));
+            share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(share, paid ? "Share payment receipt" : "Share invoice PDF"));
+        } catch (Exception error) { Toast.makeText(requireContext(), "PDF created, but sharing could not start.", Toast.LENGTH_LONG).show(); }
     }
 
     private List<String> wrapPdfText(String value, Paint paint, float maxWidth) {
