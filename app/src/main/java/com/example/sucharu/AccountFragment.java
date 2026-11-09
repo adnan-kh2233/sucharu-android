@@ -5,6 +5,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.LayoutInflater;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
@@ -19,6 +20,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+import com.google.android.material.card.MaterialCardView;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -89,6 +91,7 @@ public class AccountFragment extends Fragment {
         savedAddressArea.setAdapter(new ArrayAdapter<>(requireContext(), android.R.layout.simple_spinner_dropdown_item, ADDRESS_AREAS));
         intro = view.findViewById(R.id.account_intro);
         title = view.findViewById(R.id.account_title);
+        addPublicContactCard(view);
 
         view.findViewById(R.id.show_login).setOnClickListener(v -> setMode(false));
         view.findViewById(R.id.show_register).setOnClickListener(v -> setMode(true));
@@ -121,6 +124,55 @@ public class AccountFragment extends Fragment {
 
         if (CustomerSession.isSignedIn(requireContext())) loadProfile();
         else renderSignedOut();
+    }
+
+    private void addPublicContactCard(View root) {
+        if (!(root instanceof ViewGroup) || ((ViewGroup) root).getChildCount() == 0) return;
+        View firstChild = ((ViewGroup) root).getChildAt(0);
+        if (!(firstChild instanceof LinearLayout)) return;
+        LinearLayout page = (LinearLayout) firstChild;
+        MaterialCardView card = new MaterialCardView(requireContext());
+        card.setCardBackgroundColor(Color.WHITE); card.setRadius(Ui.dp(requireContext(), 18)); card.setCardElevation(0);
+        card.setStrokeColor(Color.rgb(226, 233, 225)); card.setStrokeWidth(Ui.dp(requireContext(), 1));
+        LinearLayout content = new LinearLayout(requireContext()); content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(Ui.dp(requireContext(), 16), Ui.dp(requireContext(), 14), Ui.dp(requireContext(), 16), Ui.dp(requireContext(), 10));
+        TextView heading = Ui.text(requireContext(), "Contact Sucharu", 18, Ui.INK, true); content.addView(heading);
+        content.addView(Ui.text(requireContext(), "Tap a contact option to open the matching app.", 12, Ui.MUTED, false), topMargin(3));
+        addContactRow(content, "➤", "Telegram", "@adnkhrad", "https://t.me/adnkhrad", Color.rgb(35, 145, 210));
+        addContactRow(content, "◉", "WhatsApp", "01303-434078", "https://wa.me/8801303434078", Color.rgb(31, 145, 92));
+        addContactRow(content, "☎", "Call / Offline", "01303-434078", "tel:+8801303434078", Ui.GREEN);
+        addContactRow(content, "☏", "Telephone", "+880 9678-736286", "tel:+8809678736286", Ui.GREEN);
+        addContactRow(content, "✉", "Email", "adnankhandoker03@gmail.com", "mailto:adnankhandoker03@gmail.com", Ui.GREEN);
+        addContactRow(content, "⌖", "Office · Open in Maps", "78/6 KDA R/A, 3rd phase, Sonadanga, Khulna", "https://www.google.com/maps/search/?api=1&query=78%2F6%20KDA%20R%2FA%2C%203rd%20phase%2C%20Sonadanga%2C%20Khulna", Ui.GREEN);
+        card.addView(content);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.topMargin = Ui.dp(requireContext(), 16); page.addView(card, params);
+    }
+
+    private void addContactRow(LinearLayout parent, String iconText, String titleText, String value, String destination, int iconColor) {
+        LinearLayout row = new LinearLayout(requireContext()); row.setOrientation(LinearLayout.HORIZONTAL); row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(Ui.dp(requireContext(), 4), Ui.dp(requireContext(), 8), Ui.dp(requireContext(), 4), Ui.dp(requireContext(), 8));
+        row.setClickable(true); row.setFocusable(true); row.setContentDescription(titleText + ", " + value);
+        TextView icon = Ui.text(requireContext(), iconText, 20, iconColor, true); icon.setGravity(Gravity.CENTER);
+        icon.setBackground(Ui.pill(Color.rgb(241, 247, 242), Ui.dp(requireContext(), 22)));
+        row.addView(icon, new LinearLayout.LayoutParams(Ui.dp(requireContext(), 42), Ui.dp(requireContext(), 42)));
+        LinearLayout labels = new LinearLayout(requireContext()); labels.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams labelsParams = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1); labelsParams.leftMargin = Ui.dp(requireContext(), 12);
+        labels.addView(Ui.text(requireContext(), titleText, 13, Ui.INK, true));
+        TextView valueText = Ui.text(requireContext(), value, 12, Ui.MUTED, false); labels.addView(valueText, topMargin(1)); row.addView(labels, labelsParams);
+        row.setOnClickListener(v -> {
+            try { startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(destination))); }
+            catch (Exception error) { Toast.makeText(requireContext(), "No app is available to open this contact link.", Toast.LENGTH_LONG).show(); }
+        });
+        parent.addView(row, topMargin(3));
+        View divider = new View(requireContext()); divider.setBackgroundColor(Color.rgb(238, 242, 238));
+        LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(requireContext(), 1));
+        parent.addView(divider, dividerParams);
+    }
+
+    private LinearLayout.LayoutParams topMargin(int marginDp) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.topMargin = Ui.dp(requireContext(), marginDp); return params;
     }
 
     private void setMode(boolean register) {
