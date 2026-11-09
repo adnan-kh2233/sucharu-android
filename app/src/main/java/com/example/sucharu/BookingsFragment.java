@@ -48,10 +48,10 @@ import java.util.List;
 
 public class BookingsFragment extends Fragment {
     private static final String[] PROGRESS_STATUSES = {
-            "booking_received", "confirmed", "assigned", "on_the_way", "service_started", "completed"
+            "booking_received", "confirmed", "assigned", "on_the_way", "service_started", "awaiting_customer_confirmation", "completed"
     };
     private static final String[] PROGRESS_LABELS = {
-            "Request received", "Confirmed", "Partner assigned", "Partner on the way", "Service started", "Completed"
+            "Request received", "Confirmed", "Partner assigned", "Partner on the way", "Service started", "Waiting for your confirmation", "Completed"
     };
     private TextView status, trackingResult;
     private LinearLayout list;
@@ -175,9 +175,9 @@ public class BookingsFragment extends Fragment {
             startCode.setOnClickListener(v -> requestServiceStartCode(row.optString("bookingId")));
             content.addView(startCode, topMargin(3));
         }
-        if ("completed".equals(bookingStatus) && row.optBoolean("completionProofPresent")) {
+        if (row.optBoolean("completionProofPresent") && ("awaiting_customer_confirmation".equals(bookingStatus) || "customer_issue_reported".equals(bookingStatus) || "completed".equals(bookingStatus))) {
             Button report = new Button(requireContext()); report.setText("View service report"); report.setAllCaps(false);
-            report.setOnClickListener(v -> showCompletionReport(row.optString("bookingId")));
+            report.setOnClickListener(v -> showCompletionReport(row));
             content.addView(report, topMargin(4));
         }
         if (canCustomerManage(bookingStatus)) {
@@ -274,7 +274,8 @@ public class BookingsFragment extends Fragment {
         new MaterialAlertDialogBuilder(requireContext()).setTitle("Service start code · " + bookingId).setView(content).setPositiveButton("Done", null).show();
     }
 
-    private void showCompletionReport(String bookingId) {
+    private void showCompletionReport(JSONObject booking) {
+        String bookingId = booking.optString("bookingId"), bookingStatus = booking.optString("status");
         CustomerSession.withToken(requireContext(), (token, tokenError) -> {
             if (!isAdded()) return;
             if (tokenError != null) { Toast.makeText(requireContext(), tokenError, Toast.LENGTH_LONG).show(); return; }
@@ -291,9 +292,35 @@ public class BookingsFragment extends Fragment {
                 addProofImage(report, "Before service", object.optString("beforeImage", ""));
                 addProofImage(report, "After service", object.optString("afterImage", ""));
                 ScrollView scroll = new ScrollView(requireContext()); scroll.addView(report);
-                new MaterialAlertDialogBuilder(requireContext()).setTitle("Service report · " + bookingId).setView(scroll).setPositiveButton("Close", null).show();
+                MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(requireContext()).setTitle("Service report · " + bookingId).setView(scroll).setPositiveButton("Close", null);
+                if ("awaiting_customer_confirmation".equals(bookingStatus)) {
+                    builder.setNeutralButton("Report a problem", (dialog, which) -> promptServiceIssue(bookingId));
+                    builder.setNegativeButton("Confirm service", (dialog, which) -> submitCustomerConfirmation(bookingId, "confirm", ""));
+                }
+                builder.show();
             });
         });
+    }
+
+    private void promptServiceIssue(String bookingId) {
+        EditText reason = new EditText(requireContext()); reason.setHint("Describe what went wrong (10–1500 characters)"); reason.setMinLines(3); reason.setMaxLines(6); reason.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        new MaterialAlertDialogBuilder(requireContext()).setTitle("Report a service concern").setMessage("Sucharu support will follow up. The booking will stay pending until the issue is resolved.").setView(reason).setNegativeButton("Back", null).setPositiveButton("Send to support", (dialog, which) -> submitCustomerConfirmation(bookingId, "report_issue", reason.getText().toString().trim())).show();
+    }
+
+    private void submitCustomerConfirmation(String bookingId, String action, String reason) {
+        if ("report_issue".equals(action) && reason.length() < 10) { Toast.makeText(requireContext(), "Please describe the problem in at least 10 characters.", Toast.LENGTH_LONG).show(); promptServiceIssue(bookingId); return; }
+        try {
+            JSONObject body = new JSONObject(); body.put("action", action); if ("report_issue".equals(action)) body.put("reason", reason);
+            CustomerSession.withToken(requireContext(), (token, tokenError) -> {
+                if (!isAdded()) return;
+                if (tokenError != null) { Toast.makeText(requireContext(), tokenError, Toast.LENGTH_LONG).show(); return; }
+                ApiClient.post("/customers/bookings/" + encodePath(bookingId) + "/confirmation", body, token, (code, object, rows, error) -> {
+                    if (!isAdded()) return;
+                    Toast.makeText(requireContext(), error == null && object != null ? object.optString("message", "Booking updated.") : error == null ? "Could not update the booking." : error, Toast.LENGTH_LONG).show();
+                    if (error == null && code >= 200 && code < 300) loadBookings();
+                });
+            });
+        } catch (Exception ignored) { Toast.makeText(requireContext(), "Could not prepare this request.", Toast.LENGTH_LONG).show(); }
     }
 
     private void addProofImage(LinearLayout parent, String heading, String encoded) {
@@ -480,6 +507,7 @@ public class BookingsFragment extends Fragment {
     }
 
     private int statusIndex(String bookingStatus) {
+        if ("customer_issue_reported".equals(bookingStatus)) return 5;
         for (int i = 0; i < PROGRESS_STATUSES.length; i++) if (PROGRESS_STATUSES[i].equals(bookingStatus)) return i;
         return 0;
     }
@@ -522,6 +550,8 @@ public class BookingsFragment extends Fragment {
             case "assigned": return "Partner assigned";
             case "on_the_way": return "Partner on the way";
             case "service_started": return "Service started";
+            case "awaiting_customer_confirmation": return "Confirm your service";
+            case "customer_issue_reported": return "Support is reviewing your concern";
             case "completed": return "Completed";
             case "cancelled": return "Cancelled";
             default: return status.replace('_', ' ');

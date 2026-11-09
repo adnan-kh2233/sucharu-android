@@ -48,7 +48,7 @@ import java.util.List;
 public class StaffPortalActivity extends AppCompatActivity {
     public static final String EXTRA_ROLE = "staff_role";
     private static final int INK = Color.rgb(23, 60, 52), GREEN = Color.rgb(24, 116, 94), MUTED = Color.rgb(100, 118, 110);
-    private static final String[] BOOKING_STATUSES = {"booking_received", "confirmed", "assigned", "on_the_way", "service_started", "completed", "cancelled"};
+    private static final String[] BOOKING_STATUSES = {"booking_received", "confirmed", "assigned", "on_the_way", "service_started", "awaiting_customer_confirmation", "customer_issue_reported", "completed", "cancelled"};
     private String role, token, staffName;
     private LinearLayout page, section;
     private ActivityResultLauncher<String> agreementSaveLauncher;
@@ -298,7 +298,7 @@ public class StaffPortalActivity extends AppCompatActivity {
                 section.removeAllViews();
                 EditText search = input("Search booking, service, customer or partner", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
                 Spinner filter = new Spinner(this);
-                String[] filters = {"All bookings", "Needs a partner", "Request received", "Confirmed", "Assigned", "On the way", "Service started", "Completed", "Cancelled"};
+                String[] filters = {"All bookings", "Needs a partner", "Request received", "Confirmed", "Assigned", "On the way", "Service started", "Awaiting customer", "Customer issue", "Completed", "Cancelled"};
                 filter.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, filters));
                 TextView count = text("", 12, MUTED, false);
                 LinearLayout bookingCards = new LinearLayout(this); bookingCards.setOrientation(LinearLayout.VERTICAL);
@@ -322,7 +322,7 @@ public class StaffPortalActivity extends AppCompatActivity {
         if (target == null || isFinishing()) return;
         target.removeAllViews();
         String needle = query == null ? "" : query.trim().toLowerCase(java.util.Locale.ROOT);
-        String[] statuses = {"", "", "booking_received", "confirmed", "assigned", "on_the_way", "service_started", "completed", "cancelled"};
+        String[] statuses = {"", "", "booking_received", "confirmed", "assigned", "on_the_way", "service_started", "awaiting_customer_confirmation", "customer_issue_reported", "completed", "cancelled"};
         int shown = 0;
         for (int i = 0; i < bookings.length(); i++) {
             JSONObject booking = bookings.optJSONObject(i); if (booking == null) continue;
@@ -777,11 +777,15 @@ public class StaffPortalActivity extends AppCompatActivity {
                 + "\nCustomer: " + (customer == null ? "" : customer.optString("name") + " · " + customer.optString("phone"))
                 + "\nAddress: " + job.optString("area") + ", " + job.optString("address")
                 + (job.optString("note").isEmpty() ? "" : "\nNote: " + job.optString("note")), 13, MUTED, false), marginTop(6));
-        String next = "assigned".equals(status) ? "on_the_way" : "on_the_way".equals(status) ? "service_started" : "service_started".equals(status) ? "completed" : "";
+        String next = "assigned".equals(status) ? "on_the_way" : "on_the_way".equals(status) ? "service_started" : "service_started".equals(status) ? "awaiting_customer_confirmation" : "";
         if ("on_the_way".equals(status)) {
             addButton(content, "Verify customer code & start service", v -> showPartnerStartServiceDialog(bookingId), false);
         } else if ("service_started".equals(status)) {
             addButton(content, "Submit completion report", v -> showCompletionReportDialog(bookingId), false);
+        } else if ("awaiting_customer_confirmation".equals(status)) {
+            content.addView(text("Your completion report is with the customer. The booking closes after they confirm it.", 13, MUTED, false), marginTop(8));
+        } else if ("customer_issue_reported".equals(status)) {
+            content.addView(text("The customer asked Sucharu support to review a service concern. Follow up with the admin team.", 13, MUTED, false), marginTop(8));
         } else if (!next.isEmpty()) {
             String label = "Mark on the way";
             addButton(content, label, v -> {
