@@ -22,6 +22,8 @@ public final class ApiClient {
     private ApiClient() {}
     public static void get(String path, String token, Callback callback) { request("GET", path, null, token, callback); }
     public static void post(String path, JSONObject body, String token, Callback callback) { request("POST", path, body, token, callback); }
+    public static void put(String path, JSONObject body, String token, Callback callback) { request("PUT", path, body, token, callback); }
+    public static void delete(String path, String token, Callback callback) { request("DELETE", path, null, token, callback); }
     // Android's HttpURLConnection does not accept PATCH in setRequestMethod().
     // Send POST with an explicit override header; the API translates it before routing.
     public static void patch(String path, JSONObject body, String token, Callback callback) { request("POST", path, body, token, callback, true); }
