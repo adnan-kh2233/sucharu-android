@@ -27,6 +27,11 @@ import android.webkit.WebViewClient;
 import android.app.Dialog;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.pdf.PdfDocument;
+import android.content.Intent;
+import android.net.Uri;
 import android.view.Window;
 import android.view.WindowManager;
 import android.widget.ImageView;
@@ -34,6 +39,7 @@ import android.widget.ImageView;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
+import androidx.core.content.FileProvider;
 
 import com.google.android.material.card.MaterialCardView;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
@@ -43,6 +49,8 @@ import org.json.JSONObject;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -187,6 +195,8 @@ public class BookingsFragment extends Fragment {
             receipt.setText("paid".equals(row.optString("paymentStatus")) ? "View payment receipt" : "View invoice");
             receipt.setOnClickListener(v -> showInvoice(row, invoice));
             content.addView(receipt, topMargin(4));
+            Button export = new Button(requireContext()); export.setText("Download / share PDF"); export.setAllCaps(false);
+            export.setOnClickListener(v -> createInvoicePdf(row, invoice)); content.addView(export, topMargin(2));
         }
         if (canCustomerManage(bookingStatus)) {
             Button manage = new Button(requireContext()); manage.setText("Change date or cancel"); manage.setAllCaps(false);
@@ -221,6 +231,85 @@ public class BookingsFragment extends Fragment {
                 .setMessage(details.toString())
                 .setPositiveButton("Done", null)
                 .show();
+    }
+
+    private void createInvoicePdf(JSONObject booking, JSONObject invoice) {
+        android.content.Context appContext = requireContext().getApplicationContext();
+        String bookingId = booking.optString("bookingId", "booking").replaceAll("[^A-Za-z0-9_-]", "_");
+        boolean paid = "paid".equals(booking.optString("paymentStatus"));
+        String paymentMethod = booking.optString("paymentMethod", "Not specified").replace('_', ' ');
+        new Thread(() -> {
+            File pdfFile = null;
+            try {
+                PdfDocument document = new PdfDocument();
+                try {
+                PdfDocument.Page page = document.startPage(new PdfDocument.PageInfo.Builder(595, 842, 1).create());
+                Canvas canvas = page.getCanvas(); Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                paint.setColor(Color.WHITE); canvas.drawColor(Color.WHITE);
+                paint.setColor(Color.rgb(24, 116, 94)); paint.setTextSize(27); paint.setFakeBoldText(true); canvas.drawText("SUCHARU", 48, 62, paint);
+                paint.setFakeBoldText(false); paint.setTextSize(12); paint.setColor(Color.rgb(100, 118, 110)); canvas.drawText("HOME SERVICES", 48, 82, paint);
+                paint.setColor(Color.rgb(24, 116, 94)); paint.setStrokeWidth(2); canvas.drawLine(48, 101, 547, 101, paint);
+                paint.setTextSize(22); paint.setFakeBoldText(true); paint.setColor(Color.rgb(23, 60, 52)); canvas.drawText(paid ? "Payment receipt" : "Service invoice", 48, 145, paint);
+                paint.setFakeBoldText(false); paint.setTextSize(12); paint.setColor(Color.rgb(100, 118, 110)); canvas.drawText("Booking reference  ·  " + booking.optString("bookingId"), 48, 170, paint);
+                paint.setColor(paid ? Color.rgb(20, 107, 81) : Color.rgb(140, 90, 4)); paint.setFakeBoldText(true); canvas.drawText(paid ? "PAID" : "PAYMENT PENDING", 48, 202, paint);
+                String[] labels = {"Service charge", "Labor", "Materials", "Discount"};
+                String[] keys = {"serviceCharge", "laborCharge", "materialsCharge", "discount"};
+                int y = 252; paint.setFakeBoldText(false); paint.setTextSize(14); paint.setColor(Color.rgb(44, 64, 55));
+                for (int i = 0; i < labels.length; i++) {
+                    canvas.drawText(labels[i], 48, y, paint);
+                    String amount = (i == 3 ? "− " : "") + "BDT " + String.format(java.util.Locale.US, "%,d", invoice.optLong(keys[i]));
+                    float amountWidth = paint.measureText(amount); canvas.drawText(amount, 547 - amountWidth, y, paint);
+                    paint.setColor(Color.rgb(228, 236, 230)); canvas.drawLine(48, y + 13, 547, y + 13, paint); paint.setColor(Color.rgb(44, 64, 55)); y += 42;
+                }
+                y += 6; paint.setFakeBoldText(true); paint.setTextSize(17); paint.setColor(Color.rgb(23, 60, 52));
+                canvas.drawText("TOTAL", 48, y, paint); String total = "BDT " + String.format(java.util.Locale.US, "%,d", invoice.optLong("total")); canvas.drawText(total, 547 - paint.measureText(total), y, paint);
+                paint.setFakeBoldText(false); paint.setTextSize(12); paint.setColor(Color.rgb(100, 118, 110)); y += 42;
+                canvas.drawText("Payment status  ·  " + (paid ? "Paid" : "Payment pending"), 48, y, paint); y += 22;
+                canvas.drawText("Payment method  ·  " + paymentMethod, 48, y, paint); y += 38;
+                String note = invoice.optString("note", "").trim();
+                if (!note.isEmpty()) {
+                    paint.setColor(Color.rgb(23, 60, 52)); paint.setFakeBoldText(true); canvas.drawText("Note", 48, y, paint); y += 20;
+                    paint.setFakeBoldText(false); paint.setColor(Color.rgb(75, 93, 84));
+                    for (String line : wrapPdfText(note, paint, 499)) { canvas.drawText(line, 48, y, paint); y += 18; }
+                }
+                paint.setColor(Color.rgb(150, 162, 155)); paint.setTextSize(10); canvas.drawText("Generated from your Sucharu customer account. Keep this document for your records.", 48, 790, paint);
+                document.finishPage(page);
+                File directory = new File(appContext.getCacheDir(), "invoices");
+                if (!directory.exists() && !directory.mkdirs()) throw new java.io.IOException("Could not prepare invoice folder.");
+                pdfFile = new File(directory, "Sucharu-" + bookingId + "-" + (paid ? "receipt" : "invoice") + ".pdf");
+                try (FileOutputStream output = new FileOutputStream(pdfFile)) { document.writeTo(output); }
+                } finally {
+                    document.close();
+                }
+            } catch (Exception error) {
+                String message = error.getMessage() == null ? "Could not create the PDF." : error.getMessage();
+                new Handler(Looper.getMainLooper()).post(() -> { if (isAdded()) Toast.makeText(requireContext(), message, Toast.LENGTH_LONG).show(); });
+                return;
+            }
+            File readyFile = pdfFile;
+            new Handler(Looper.getMainLooper()).post(() -> {
+                if (!isAdded()) return;
+                try {
+                    Uri uri = FileProvider.getUriForFile(requireContext(), requireContext().getPackageName() + ".fileprovider", readyFile);
+                    Intent share = new Intent(Intent.ACTION_SEND); share.setType("application/pdf");
+                    share.putExtra(Intent.EXTRA_STREAM, uri); share.setClipData(android.content.ClipData.newUri(requireContext().getContentResolver(), "Sucharu invoice", uri));
+                    share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivity(Intent.createChooser(share, paid ? "Share payment receipt" : "Share invoice PDF"));
+                } catch (Exception error) { Toast.makeText(requireContext(), "PDF created, but sharing could not start.", Toast.LENGTH_LONG).show(); }
+            });
+        }, "sucharu-invoice-pdf").start();
+    }
+
+    private List<String> wrapPdfText(String value, Paint paint, float maxWidth) {
+        List<String> lines = new ArrayList<>(); String remaining = value.replace('\n', ' ');
+        while (!remaining.isEmpty()) {
+            int count = paint.breakText(remaining, true, maxWidth, null);
+            if (count <= 0) break;
+            int split = count;
+            if (count < remaining.length()) { int space = remaining.lastIndexOf(' ', count); if (space > 0) split = space; }
+            lines.add(remaining.substring(0, split).trim()); remaining = remaining.substring(split).trim();
+        }
+        return lines;
     }
 
     private void showPartnerTracker(String bookingId) {
