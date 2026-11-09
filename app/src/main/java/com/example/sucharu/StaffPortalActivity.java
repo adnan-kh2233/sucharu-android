@@ -342,35 +342,37 @@ public class StaffPortalActivity extends AppCompatActivity {
         form.addView(selectedAreaSummary, marginTop(4));
         form.addView(label("Add an area manually (optional)")); form.addView(customAreas);
         form.addView(text("Select one or more options, or type additional categories/areas above. If no coverage area is selected, the partner can be assigned to any configured area.", 12, MUTED, false), marginTop(8));
+        final androidx.appcompat.app.AlertDialog[] partnerDialog = new androidx.appcompat.app.AlertDialog[1];
+        form.addView(primaryButton("Submit partner application", v -> {
+            String partnerName = name.getText().toString().trim(), partnerPhone = phone.getText().toString().trim();
+            JSONArray categoryList = combineValues(selectedCategories, customCategories.getText().toString());
+            JSONArray areaList = combineValues(mapAreaLabels(selectedAreas, areaLabels, areaValues), customAreas.getText().toString());
+            JSONArray skillList = combineValues(selectedSkills, customSkills.getText().toString());
+            JSONArray dayList = combineValues(selectedDays, customDays.getText().toString());
+            JSONArray timeList = combineValues(selectedTimes, customTimes.getText().toString());
+            if (partnerName.isEmpty() || partnerPhone.isEmpty() || categoryList.length() == 0) { toast("Enter a name, phone number and at least one service category."); return; }
+            JSONObject body = new JSONObject();
+            try {
+                body.put("name", partnerName); body.put("phone", partnerPhone); body.put("category", categoryList); body.put("area", areaList);
+                body.put("fatherName", fatherName.getText().toString().trim()); body.put("motherName", motherName.getText().toString().trim());
+                body.put("permanentAddress", permanentAddress.getText().toString().trim()); body.put("occupation", occupation.getText().toString().trim());
+                body.put("monthlyIncome", monthlyIncome.getText().toString().trim()); body.put("nationality", nationality.getText().toString().trim());
+                body.put("facebook", facebook.getText().toString().trim()); body.put("whatsapp", whatsapp.getText().toString().trim());
+                body.put("email", email.getText().toString().trim()); body.put("nidNumber", nidNumber.getText().toString().trim());
+                body.put("skills", skillList); body.put("availableDays", dayList); body.put("availableTimes", timeList);
+            } catch (Exception ignored) { }
+            ApiClient.post("/partners", body, token, (code, result, array, error) -> {
+                if (!ready(error)) return;
+                toast("Partner application submitted. Verify and activate the partner next.");
+                if (partnerDialog[0] != null) partnerDialog[0].dismiss();
+                loadAdminPartners();
+            });
+        }), marginTop(14));
         ScrollView formScroll = new ScrollView(this); formScroll.setFillViewport(false); formScroll.addView(form);
-        new MaterialAlertDialogBuilder(this).setTitle("Add partner")
+        partnerDialog[0] = new MaterialAlertDialogBuilder(this).setTitle("Add partner")
                 .setMessage("The new partner starts pending and cannot sign in until Sucharu verifies and activates them.")
-                .setView(formScroll).setNegativeButton("Cancel", null)
-                .setPositiveButton("Create partner", (dialog, which) -> {
-                    String partnerName = name.getText().toString().trim(), partnerPhone = phone.getText().toString().trim();
-                    JSONArray categoryList = combineValues(selectedCategories, customCategories.getText().toString());
-                    JSONArray areaList = combineValues(mapAreaLabels(selectedAreas, areaLabels, areaValues), customAreas.getText().toString());
-                    JSONArray skillList = combineValues(selectedSkills, customSkills.getText().toString());
-                    JSONArray dayList = combineValues(selectedDays, customDays.getText().toString());
-                    JSONArray timeList = combineValues(selectedTimes, customTimes.getText().toString());
-                    if (partnerName.isEmpty() || partnerPhone.isEmpty() || categoryList.length() == 0) { toast("Enter a name, phone number and at least one service category."); return; }
-                    JSONObject body = new JSONObject();
-                    try {
-                        body.put("name", partnerName); body.put("phone", partnerPhone); body.put("category", categoryList); body.put("area", areaList);
-                        body.put("fatherName", fatherName.getText().toString().trim()); body.put("motherName", motherName.getText().toString().trim());
-                        body.put("permanentAddress", permanentAddress.getText().toString().trim()); body.put("occupation", occupation.getText().toString().trim());
-                        body.put("monthlyIncome", monthlyIncome.getText().toString().trim()); body.put("nationality", nationality.getText().toString().trim());
-                        body.put("facebook", facebook.getText().toString().trim()); body.put("whatsapp", whatsapp.getText().toString().trim());
-                        body.put("email", email.getText().toString().trim()); body.put("nidNumber", nidNumber.getText().toString().trim());
-                        body.put("skills", skillList); body.put("availableDays", dayList); body.put("availableTimes", timeList);
-                    }
-                    catch (Exception ignored) { }
-                    ApiClient.post("/partners", body, token, (code, result, array, error) -> {
-                        if (!ready(error)) return;
-                        toast("Partner created. Verify and activate them, then set their portal password.");
-                        loadAdminPartners();
-                    });
-                }).show();
+                .setView(formScroll).setNegativeButton("Cancel", null).create();
+        partnerDialog[0].show();
     }
 
     private void choosePartnerOptions(String title, List<String> options, List<String> selected, TextView summary, String emptyText) {
