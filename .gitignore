@@ -3,6 +3,7 @@
 .gradle-codex/
 .idea/
 /app/build/
+/operations/build/
 /local.properties
 /.idea/caches
 /.idea/libraries
