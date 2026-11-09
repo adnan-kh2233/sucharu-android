@@ -13,8 +13,14 @@ import androidx.appcompat.app.AppCompatActivity;
 import com.google.android.material.card.MaterialCardView;
 
 public class RoleChooserActivity extends AppCompatActivity {
+    public static final String EXTRA_OPEN_ROLE = "open_staff_role";
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
+        if ("partner".equals(getIntent().getStringExtra(EXTRA_OPEN_ROLE))) {
+            openRole("partner");
+            finish();
+            return;
+        }
         getWindow().setStatusBarColor(Color.rgb(244, 247, 237));
         getWindow().getDecorView().setSystemUiVisibility(android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
 

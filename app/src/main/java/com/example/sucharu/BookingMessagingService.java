@@ -19,6 +19,8 @@ import java.util.Map;
 
 public class BookingMessagingService extends FirebaseMessagingService {
     public static final String CHANNEL_ID = "sucharu_booking_updates";
+    public static final String ACTION_PARTNER_JOB_ASSIGNED = "com.example.sucharu.PARTNER_JOB_ASSIGNED";
+    public static final String ACTION_CUSTOMER_BOOKING_UPDATED = "com.example.sucharu.CUSTOMER_BOOKING_UPDATED";
 
     @Override public void onNewToken(String token) {
         super.onNewToken(token);
@@ -27,16 +29,19 @@ public class BookingMessagingService extends FirebaseMessagingService {
 
     @Override public void onMessageReceived(RemoteMessage message) {
         super.onMessageReceived(message);
-        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return;
         Map<String, String> data = message.getData();
         String bookingId = data.getOrDefault("bookingId", "");
         RemoteMessage.Notification payload = message.getNotification();
-        String title = payload == null ? "Sucharu booking update" : payload.getTitle();
-        String body = payload == null ? "Open Sucharu to see the latest update." : payload.getBody();
-        showNotification(title, body, bookingId);
+        String title = payload == null ? data.getOrDefault("title", "Sucharu booking update") : payload.getTitle();
+        String body = payload == null ? data.getOrDefault("body", "Open Sucharu to see the latest update.") : payload.getBody();
+        boolean partner = "partner".equals(data.get("role"));
+        if (partner) sendBroadcast(new Intent(ACTION_PARTNER_JOB_ASSIGNED).setPackage(getPackageName()).putExtra("booking_id", bookingId));
+        else sendBroadcast(new Intent(ACTION_CUSTOMER_BOOKING_UPDATED).setPackage(getPackageName()).putExtra("booking_id", bookingId));
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return;
+        showNotification(title, body, bookingId, partner);
     }
 
-    private void showNotification(String title, String body, String bookingId) {
+    private void showNotification(String title, String body, String bookingId, boolean partner) {
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager == null) return;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -44,8 +49,10 @@ public class BookingMessagingService extends FirebaseMessagingService {
             channel.setDescription("Updates about your Sucharu service requests");
             manager.createNotificationChannel(channel);
         }
-        Intent open = new Intent(this, MainActivity.class).putExtra("notification_booking_id", bookingId)
-                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        Intent open = partner
+                ? new Intent(this, RoleChooserActivity.class).putExtra(RoleChooserActivity.EXTRA_OPEN_ROLE, "partner")
+                : new Intent(this, MainActivity.class).putExtra("notification_booking_id", bookingId);
+        open.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent pending = PendingIntent.getActivity(this, bookingId.hashCode(), open,
                 PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0));
         NotificationCompat.Builder notification = new NotificationCompat.Builder(this, CHANNEL_ID)

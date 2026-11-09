@@ -1,6 +1,11 @@
 package com.example.sucharu;
 
 import android.graphics.Color;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -42,6 +47,10 @@ public class BookingsFragment extends Fragment {
     private LinearLayout list;
     private EditText bookingId, phone;
     private ScrollView bookingsScroll;
+    private boolean bookingUpdateReceiverRegistered;
+    private final BroadcastReceiver bookingUpdateReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) { if (isAdded()) loadBookings(); }
+    };
 
     @Nullable @Override public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
         return inflater.inflate(R.layout.fragment_bookings, container, false);
@@ -58,6 +67,23 @@ public class BookingsFragment extends Fragment {
         view.findViewById(R.id.open_notifications).setOnClickListener(v -> loadNotifications());
         view.findViewById(R.id.track_button).setOnClickListener(v -> trackBooking());
         loadBookings();
+    }
+
+    @Override public void onStart() {
+        super.onStart();
+        if (bookingUpdateReceiverRegistered) return;
+        IntentFilter filter = new IntentFilter(BookingMessagingService.ACTION_CUSTOMER_BOOKING_UPDATED);
+        if (Build.VERSION.SDK_INT >= 33) requireContext().registerReceiver(bookingUpdateReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        else requireContext().registerReceiver(bookingUpdateReceiver, filter);
+        bookingUpdateReceiverRegistered = true;
+    }
+
+    @Override public void onStop() {
+        if (bookingUpdateReceiverRegistered && getContext() != null) {
+            try { requireContext().unregisterReceiver(bookingUpdateReceiver); } catch (IllegalArgumentException ignored) { }
+            bookingUpdateReceiverRegistered = false;
+        }
+        super.onStop();
     }
 
     public void scrollToTracker() {
@@ -115,6 +141,10 @@ public class BookingsFragment extends Fragment {
         badgeParams.topMargin = Ui.dp(requireContext(), 9);
         content.addView(statusBadge, badgeParams);
         if (!"cancelled".equals(bookingStatus)) content.addView(progressSummary(bookingStatus), topMargin(10));
+        JSONObject partner = row.optJSONObject("partner");
+        if (partner != null && !partner.optString("name").isEmpty()) {
+            content.addView(Ui.text(requireContext(), "Service partner · " + partner.optString("name"), 13, Ui.GREEN, true), topMargin(7));
+        }
         String date = schedule == null ? "" : schedule.optString("date", "");
         String time = schedule == null ? "" : schedule.optString("time", "");
         content.addView(Ui.text(requireContext(), date + (time.isEmpty() ? "" : " · " + time), 13, Ui.MUTED, false), topMargin(5));

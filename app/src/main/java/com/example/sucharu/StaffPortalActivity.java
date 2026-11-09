@@ -1,9 +1,17 @@
 package com.example.sucharu;
 
+import android.Manifest;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.Color;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.text.Editable;
 import android.text.InputType;
+import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.ArrayAdapter;
@@ -17,9 +25,11 @@ import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.core.content.ContextCompat;
 
 import com.google.android.material.card.MaterialCardView;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+import com.google.firebase.messaging.FirebaseMessaging;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -38,10 +48,21 @@ public class StaffPortalActivity extends AppCompatActivity {
     private String role, token, staffName;
     private LinearLayout page, section;
     private ActivityResultLauncher<String> agreementSaveLauncher;
+    private ActivityResultLauncher<String> partnerNotificationPermission;
+    private boolean partnerAssignmentReceiverRegistered;
+    private final BroadcastReceiver partnerAssignmentReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if ("partner".equals(role) && section != null && !isFinishing()) loadPartnerJobs();
+        }
+    };
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         agreementSaveLauncher = registerForActivityResult(new ActivityResultContracts.CreateDocument(), this::saveAgreementPdf);
+        partnerNotificationPermission = registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
+            if (granted) registerPartnerDeviceToken();
+            else toast("Turn on notifications to receive new job alerts when Sucharu is closed.");
+        });
         role = getIntent().getStringExtra(EXTRA_ROLE);
         if (!"admin".equals(role) && !"partner".equals(role)) role = "admin";
         getWindow().setStatusBarColor(Color.rgb(244, 247, 237));
@@ -121,8 +142,68 @@ public class StaffPortalActivity extends AppCompatActivity {
             if (profile == null) profile = response.optJSONObject("partner");
             staffName = profile == null ? role : profile.optString("name", role);
             if (token.isEmpty()) { toast("The server did not return a secure session."); return; }
-            if ("admin".equals(role)) showAdminPortal("overview"); else showPartnerPortal();
+            if ("admin".equals(role)) showAdminPortal("overview"); else {
+                showPartnerPortal();
+                enablePartnerNotifications();
+            }
         });
+    }
+
+    private void enablePartnerNotifications() {
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            partnerNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS);
+        } else registerPartnerDeviceToken();
+    }
+
+    private void registerPartnerDeviceToken() {
+        if (!"partner".equals(role) || token == null || token.isEmpty()) return;
+        FirebaseMessaging.getInstance().getToken().addOnSuccessListener(deviceToken -> {
+            if (deviceToken == null || deviceToken.isEmpty() || isFinishing()) return;
+            try {
+                JSONObject body = new JSONObject(); body.put("token", deviceToken); body.put("platform", "android");
+                ApiClient.post("/partner/device-tokens", body, token, (code, result, rows, error) -> { });
+            } catch (Exception ignored) { }
+        });
+    }
+
+    private void removePartnerDeviceToken() {
+        if (!"partner".equals(role) || token == null || token.isEmpty()) return;
+        FirebaseMessaging.getInstance().getToken().addOnSuccessListener(deviceToken -> {
+            if (deviceToken == null || deviceToken.isEmpty()) return;
+            try {
+                JSONObject body = new JSONObject(); body.put("token", deviceToken); body.put("action", "delete");
+                ApiClient.post("/partner/device-tokens", body, token, (code, result, rows, error) -> { });
+            } catch (Exception ignored) { }
+        });
+    }
+
+    @Override protected void onStart() {
+        super.onStart();
+        registerPartnerAssignmentReceiver();
+    }
+
+    @Override protected void onStop() {
+        unregisterPartnerAssignmentReceiver();
+        super.onStop();
+    }
+
+    @Override protected void onDestroy() {
+        unregisterPartnerAssignmentReceiver();
+        super.onDestroy();
+    }
+
+    private void registerPartnerAssignmentReceiver() {
+        if (!"partner".equals(role) || section == null || partnerAssignmentReceiverRegistered) return;
+        IntentFilter filter = new IntentFilter(BookingMessagingService.ACTION_PARTNER_JOB_ASSIGNED);
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(partnerAssignmentReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        else registerReceiver(partnerAssignmentReceiver, filter);
+        partnerAssignmentReceiverRegistered = true;
+    }
+
+    private void unregisterPartnerAssignmentReceiver() {
+        if (!partnerAssignmentReceiverRegistered) return;
+        try { unregisterReceiver(partnerAssignmentReceiver); } catch (IllegalArgumentException ignored) { }
+        partnerAssignmentReceiverRegistered = false;
     }
 
     private void showAdminPortal(String tab) {
@@ -179,17 +260,62 @@ public class StaffPortalActivity extends AppCompatActivity {
     }
 
     private void loadAdminBookings() {
+        section.removeAllViews();
         section.addView(text("Loading bookings…", 14, MUTED, false));
         ApiClient.get("/bookings", token, (status, object, rows, error) -> {
             if (!ready(error)) return;
+            if (section == null || isFinishing()) return;
             section.removeAllViews();
-            if (rows == null || rows.length() == 0) { section.addView(text("No bookings yet.", 14, MUTED, false)); return; }
+            if (rows == null || rows.length() == 0) { section.addView(text("No bookings yet. New customer requests will appear here.", 14, MUTED, false)); return; }
             loadAssignablePartners(partners -> {
-                if (!isFinishing()) for (int i = 0; i < rows.length(); i++) {
-                    JSONObject booking = rows.optJSONObject(i); if (booking != null) addAdminBooking(booking, partners);
-                }
+                if (isFinishing() || section == null) return;
+                section.removeAllViews();
+                EditText search = input("Search booking, service, customer or partner", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+                Spinner filter = new Spinner(this);
+                String[] filters = {"All bookings", "Needs a partner", "Request received", "Confirmed", "Assigned", "On the way", "Service started", "Completed", "Cancelled"};
+                filter.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, filters));
+                TextView count = text("", 12, MUTED, false);
+                LinearLayout bookingCards = new LinearLayout(this); bookingCards.setOrientation(LinearLayout.VERTICAL);
+                section.addView(label("Find and filter bookings")); section.addView(search); section.addView(filter, marginTop(6)); section.addView(count, marginTop(7)); section.addView(bookingCards);
+                Runnable render = () -> renderAdminBookingCards(rows, partners, bookingCards, search.getText().toString(), filter.getSelectedItemPosition(), count);
+                search.addTextChangedListener(new TextWatcher() {
+                    @Override public void beforeTextChanged(CharSequence s, int start, int c, int a) { }
+                    @Override public void onTextChanged(CharSequence s, int start, int before, int countChanged) { render.run(); }
+                    @Override public void afterTextChanged(Editable s) { }
+                });
+                filter.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+                    @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) { render.run(); }
+                    @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
+                });
+                render.run();
             });
         });
+    }
+
+    private void renderAdminBookingCards(JSONArray bookings, JSONArray partners, LinearLayout target, String query, int filter, TextView count) {
+        if (target == null || isFinishing()) return;
+        target.removeAllViews();
+        String needle = query == null ? "" : query.trim().toLowerCase(java.util.Locale.ROOT);
+        String[] statuses = {"", "", "booking_received", "confirmed", "assigned", "on_the_way", "service_started", "completed", "cancelled"};
+        int shown = 0;
+        for (int i = 0; i < bookings.length(); i++) {
+            JSONObject booking = bookings.optJSONObject(i); if (booking == null) continue;
+            String status = booking.optString("status"), expectedStatus = statuses[Math.max(0, Math.min(filter, statuses.length - 1))];
+            JSONObject assignedPartner = booking.optJSONObject("partner");
+            boolean needsPartner = assignedPartner == null || assignedPartner.optString("partnerId").isEmpty();
+            if (filter == 1 && (!needsPartner || "cancelled".equals(status) || "completed".equals(status))) continue;
+            if (filter > 1 && !expectedStatus.equals(status)) continue;
+            JSONObject service = booking.optJSONObject("service"), customer = booking.optJSONObject("customer"), schedule = booking.optJSONObject("schedule");
+            String haystack = (booking.optString("bookingId") + " " + (service == null ? "" : service.optString("name") + " " + service.optString("category"))
+                    + " " + (customer == null ? "" : customer.optString("name") + " " + customer.optString("phone"))
+                    + " " + (schedule == null ? "" : schedule.optString("date")) + " " + booking.optString("area")
+                    + " " + (assignedPartner == null ? "" : assignedPartner.optString("name"))).toLowerCase(java.util.Locale.ROOT);
+            if (!needle.isEmpty() && !haystack.contains(needle)) continue;
+            addAdminBooking(booking, partners, bookings, target);
+            shown++;
+        }
+        count.setText("Showing " + shown + " of " + bookings.length() + " bookings");
+        if (shown == 0) target.addView(text("No bookings match this search or filter. Try another status or clear the search.", 14, MUTED, false), marginTop(12));
     }
 
     private interface RowsCallback { void complete(JSONArray rows); }
@@ -197,7 +323,7 @@ public class StaffPortalActivity extends AppCompatActivity {
         ApiClient.get("/partners", token, (status, object, rows, error) -> callback.complete(rows == null ? new JSONArray() : rows));
     }
 
-    private void addAdminBooking(JSONObject booking, JSONArray partners) {
+    private void addAdminBooking(JSONObject booking, JSONArray partners, JSONArray allBookings, LinearLayout bookingCards) {
         MaterialCardView card = card(); LinearLayout content = cardContent(card);
         JSONObject service = booking.optJSONObject("service"), customer = booking.optJSONObject("customer"), schedule = booking.optJSONObject("schedule");
         String bookingId = booking.optString("bookingId");
@@ -207,18 +333,33 @@ public class StaffPortalActivity extends AppCompatActivity {
                 + "\n" + booking.optString("area") + ", " + booking.optString("address"), 13, MUTED, false), marginTop(7));
 
         Spinner partnerPicker = new Spinner(this); List<String> partnerIds = new ArrayList<>(), partnerLabels = new ArrayList<>();
-        partnerIds.add(""); partnerLabels.add("Choose active, verified partner");
+        partnerIds.add(""); partnerLabels.add("Choose active partner with portal access");
         int selectedPartner = 0; JSONObject currentPartner = booking.optJSONObject("partner");
+        int availableCount = 0;
         for (int i = 0; i < partners.length(); i++) {
-            JSONObject partner = partners.optJSONObject(i); if (partner == null || !"active".equals(partner.optString("status")) || !"verified".equals(partner.optString("verificationStatus"))) continue;
-            String id = partner.optString("_id"); partnerIds.add(id); partnerLabels.add(partner.optString("name") + " · " + partner.optString("partnerId"));
-            if (currentPartner != null && id.equals(currentPartner.optString("partnerId"))) selectedPartner = partnerIds.size() - 1;
+            JSONObject partner = partners.optJSONObject(i); if (partner == null) continue;
+            String id = partner.optString("_id");
+            boolean currentSelection = currentPartner != null && id.equals(currentPartner.optString("partnerId"));
+            boolean canBeAssigned = "active".equals(partner.optString("status")) && "verified".equals(partner.optString("verificationStatus")) && partner.optBoolean("portalEnabled");
+            if (currentSelection) {
+                partnerIds.add(id); partnerLabels.add(partner.optString("name") + " · " + partner.optString("partnerId") + " · currently assigned");
+                selectedPartner = partnerIds.size() - 1; availableCount++;
+                continue;
+            }
+            if (!canBeAssigned || !partnerMatchesBooking(partner, booking) || partnerHasTimeConflict(partner, booking, allBookings)) continue;
+            availableCount++;
+            partnerIds.add(id); partnerLabels.add(partner.optString("name") + " · " + partner.optString("partnerId") + " · available");
         }
         partnerPicker.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, partnerLabels)); partnerPicker.setSelection(selectedPartner);
         content.addView(label("Assign partner"), marginTop(9)); content.addView(partnerPicker);
+        content.addView(text(availableCount == 0 ? "No active, verified partner matches this service and time." : availableCount + " active, verified partner option(s) available for this service and time.", 12, MUTED, false), marginTop(4));
         addButton(content, "Save assignment", v -> {
             JSONObject body = new JSONObject(); try { body.put("partnerId", partnerIds.get(partnerPicker.getSelectedItemPosition())); } catch (Exception ignored) { }
-            ApiClient.patch("/bookings/" + encode(bookingId) + "/partner", body, token, (code, result, array, err) -> { if (ready(err)) loadAdminBookings(); });
+            ApiClient.patch("/bookings/" + encode(bookingId) + "/partner", body, token, (code, result, array, err) -> {
+                if (!ready(err)) return;
+                toast("Partner assigned. They will be notified and the customer booking status is updated.");
+                loadAdminBookings();
+            });
         }, false);
 
         Spinner statusPicker = new Spinner(this); statusPicker.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, BOOKING_STATUSES));
@@ -228,7 +369,57 @@ public class StaffPortalActivity extends AppCompatActivity {
             JSONObject body = new JSONObject(); try { body.put("status", BOOKING_STATUSES[statusPicker.getSelectedItemPosition()]); } catch (Exception ignored) { }
             ApiClient.patch("/bookings/" + encode(bookingId) + "/status", body, token, (code, result, array, err) -> { if (ready(err)) loadAdminBookings(); });
         }, false);
-        section.addView(card, marginTop(10));
+        bookingCards.addView(card, marginTop(10));
+    }
+
+    private boolean partnerMatchesBooking(JSONObject partner, JSONObject booking) {
+        JSONObject service = booking.optJSONObject("service");
+        JSONArray categories = partner.optJSONArray("category");
+        if (service == null || categories == null) return false;
+        boolean categoryMatch = false;
+        for (int i = 0; i < categories.length(); i++) {
+            String partnerCategory = normalizeCategory(categories.optString(i));
+            if (partnerCategory.equals(normalizeCategory(service.optString("category"))) || partnerCategory.equals(normalizeCategory(service.optString("name")))) {
+                categoryMatch = true; break;
+            }
+        }
+        if (!categoryMatch) return false;
+        JSONArray areas = partner.optJSONArray("area");
+        if (areas == null || areas.length() == 0) return true;
+        for (int i = 0; i < areas.length(); i++) if (normalizeArea(areas.optString(i)).equals(normalizeArea(booking.optString("area")))) return true;
+        return false;
+    }
+
+    private boolean partnerHasTimeConflict(JSONObject partner, JSONObject booking, JSONArray allBookings) {
+        JSONObject targetSchedule = booking.optJSONObject("schedule");
+        String targetDate = targetSchedule == null ? "" : targetSchedule.optString("date"), targetTime = targetSchedule == null ? "" : targetSchedule.optString("time");
+        for (int i = 0; i < allBookings.length(); i++) {
+            JSONObject other = allBookings.optJSONObject(i); if (other == null || other.optString("bookingId").equals(booking.optString("bookingId"))) continue;
+            String status = other.optString("status"); if ("completed".equals(status) || "cancelled".equals(status)) continue;
+            JSONObject assigned = other.optJSONObject("partner"), schedule = other.optJSONObject("schedule");
+            if (assigned != null && partner.optString("_id").equals(assigned.optString("partnerId")) && schedule != null
+                    && targetDate.equals(schedule.optString("date")) && targetTime.equals(schedule.optString("time"))) return true;
+        }
+        return false;
+    }
+
+    private String normalizeCategory(String value) {
+        String normalized = (value == null ? "" : value).trim().toLowerCase(java.util.Locale.ROOT).replaceAll("[._-]+", " ").replaceAll("\\s+", " ");
+        if (normalized.contains("electric")) return "electrical";
+        if (normalized.contains("plumb")) return "plumbing";
+        if (normalized.equals("ac") || normalized.contains("air condition")) return "ac services";
+        if (normalized.contains("ac service") || normalized.contains("ac servic")) return "ac services";
+        if (normalized.contains("clean")) return "cleaning";
+        if (normalized.equals("electrician")) return "electrical";
+        if (normalized.equals("plumber")) return "plumbing";
+        return normalized;
+    }
+
+    private String normalizeArea(String value) {
+        String normalized = (value == null ? "" : value).trim().toLowerCase(java.util.Locale.ROOT).replaceAll("[._-]+", " ").replaceAll("\\s+", " ");
+        if ("sodor".equals(normalized) || "sadar".equals(normalized) || "khulna sodor".equals(normalized)) return "khulna sadar";
+        if ("khalispur".equals(normalized)) return "khalishpur";
+        return normalized;
     }
 
     private void loadAdminPartners() {
@@ -530,16 +721,23 @@ public class StaffPortalActivity extends AppCompatActivity {
         section = new LinearLayout(this); section.setOrientation(LinearLayout.VERTICAL);
         page.addView(primaryButton("Refresh assigned jobs", v -> loadPartnerJobs()), marginTop(16));
         page.addView(section, marginTop(8));
-        addButton(page, "Sign out", v -> { token = null; finish(); }, true);
+        addButton(page, "Sign out", v -> { removePartnerDeviceToken(); token = null; finish(); }, true);
         loadPartnerJobs();
+        registerPartnerAssignmentReceiver();
     }
 
     private void loadPartnerJobs() {
         if (section == null) return;
         section.removeAllViews(); section.addView(text("Loading assigned jobs…", 14, MUTED, false));
         ApiClient.get("/partner/jobs", token, (status, object, rows, error) -> {
-            if (!ready(error)) return; section.removeAllViews();
-            if (rows == null || rows.length() == 0) { section.addView(text("No active assigned bookings right now.", 14, MUTED, false)); return; }
+            if (section == null || isFinishing()) return;
+            section.removeAllViews();
+            if (error != null) {
+                section.addView(text("Could not load assigned jobs. Check your connection, then tap Refresh assigned jobs.", 14, MUTED, false));
+                ready(error);
+                return;
+            }
+            if (rows == null || rows.length() == 0) { section.addView(text("No assigned jobs for this partner account yet. New assignments appear here automatically. If Admin just assigned work, confirm it was assigned to this same partner account.", 14, MUTED, false)); return; }
             for (int i = 0; i < rows.length(); i++) { JSONObject job = rows.optJSONObject(i); if (job != null) addPartnerJob(job); }
         });
     }
