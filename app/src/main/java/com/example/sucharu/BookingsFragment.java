@@ -7,6 +7,8 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -20,6 +22,11 @@ import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.ScrollView;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.app.Dialog;
+import android.view.Window;
+import android.view.WindowManager;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -153,6 +160,13 @@ public class BookingsFragment extends Fragment {
         details.setPadding(0, Ui.dp(requireContext(), 10), 0, Ui.dp(requireContext(), 2));
         details.setOnClickListener(v -> showProgressTimeline(row));
         content.addView(details);
+        if ("on_the_way".equals(bookingStatus) && partner != null && !partner.optString("name").isEmpty()) {
+            Button trackPartner = new Button(requireContext());
+            trackPartner.setText("Track partner live");
+            trackPartner.setAllCaps(false);
+            trackPartner.setOnClickListener(v -> showPartnerTracker(row.optString("bookingId")));
+            content.addView(trackPartner, topMargin(5));
+        }
         if (canCustomerManage(bookingStatus)) {
             Button manage = new Button(requireContext()); manage.setText("Change date or cancel"); manage.setAllCaps(false);
             manage.setOnClickListener(v -> showManageBooking(row)); content.addView(manage, topMargin(4));
@@ -165,6 +179,59 @@ public class BookingsFragment extends Fragment {
             content.addView(Ui.text(requireContext(), "Your rating · " + review.optInt("rating") + "/5" + (review.optString("comment").isEmpty() ? "" : "\n" + review.optString("comment")), 13, Ui.MUTED, false), topMargin(6));
         }
         return card;
+    }
+
+    private void showPartnerTracker(String bookingId) {
+        CustomerSession.withToken(requireContext(), (token, tokenError) -> {
+            if (!isAdded()) return;
+            if (tokenError != null) { Toast.makeText(requireContext(), tokenError, Toast.LENGTH_LONG).show(); return; }
+            Dialog dialog = new Dialog(requireContext());
+            LinearLayout root = new LinearLayout(requireContext()); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(Color.WHITE);
+            LinearLayout header = new LinearLayout(requireContext()); header.setOrientation(LinearLayout.VERTICAL); header.setPadding(Ui.dp(requireContext(), 18), Ui.dp(requireContext(), 14), Ui.dp(requireContext(), 18), Ui.dp(requireContext(), 10));
+            header.addView(Ui.text(requireContext(), "Partner on the way", 19, Ui.INK, true));
+            TextView updateText = Ui.text(requireContext(), "Waiting for the partner’s first GPS update…", 12, Ui.MUTED, false); updateText.setPadding(0, Ui.dp(requireContext(), 4), 0, 0); header.addView(updateText);
+            root.addView(header, new LinearLayout.LayoutParams(-1, -2));
+            WebView map = new WebView(requireContext()); map.setBackgroundColor(Color.rgb(237, 243, 237)); map.getSettings().setJavaScriptEnabled(true); map.getSettings().setDomStorageEnabled(true);
+            final boolean[] ready = {false};
+            map.setWebViewClient(new WebViewClient() { @Override public void onPageFinished(WebView view, String url) { ready[0] = true; } });
+            root.addView(map, new LinearLayout.LayoutParams(-1, 0, 1));
+            com.google.android.material.button.MaterialButton close = new com.google.android.material.button.MaterialButton(requireContext()); close.setText("Close map"); close.setAllCaps(false);
+            LinearLayout.LayoutParams closeParams = new LinearLayout.LayoutParams(-1, Ui.dp(requireContext(), 48)); closeParams.setMargins(Ui.dp(requireContext(), 14), Ui.dp(requireContext(), 8), Ui.dp(requireContext(), 14), Ui.dp(requireContext(), 12)); root.addView(close, closeParams);
+            dialog.setContentView(root);
+            dialog.setOnShowListener(ignored -> { Window window = dialog.getWindow(); if (window != null) { window.setBackgroundDrawableResource(android.R.color.transparent); window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT); } });
+            Handler handler = new Handler(Looper.getMainLooper());
+            Runnable[] poll = new Runnable[1];
+            poll[0] = () -> {
+                if (!dialog.isShowing() || !isAdded()) return;
+                ApiClient.get("/customers/bookings/" + encodePath(bookingId) + "/location", token, (code, object, rows, error) -> {
+                    if (!dialog.isShowing() || !isAdded()) return;
+                    if (error != null || object == null) updateText.setText(error == null ? "Waiting for the partner to share their location…" : error);
+                    else {
+                        double latitude = object.optDouble("latitude", Double.NaN), longitude = object.optDouble("longitude", Double.NaN);
+                        if (Double.isFinite(latitude) && Double.isFinite(longitude)) {
+                            int accuracy = object.optInt("accuracy", -1);
+                            updateText.setText("Location updated just now" + (accuracy >= 0 ? " · accuracy about " + accuracy + " m" : ""));
+                            if (ready[0]) map.evaluateJavascript("window.updatePartnerPin(" + latitude + "," + longitude + ");", null);
+                        }
+                    }
+                    handler.postDelayed(poll[0], 10000L);
+                });
+            };
+            close.setOnClickListener(v -> dialog.dismiss());
+            dialog.setOnDismissListener(ignored -> { handler.removeCallbacks(poll[0]); map.stopLoading(); map.destroy(); });
+            dialog.show();
+            map.loadDataWithBaseURL("https://unpkg.com/", trackingMapHtml(), "text/html", "UTF-8", null);
+            poll[0].run();
+        });
+    }
+
+    private String trackingMapHtml() {
+        return "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no'><link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'><style>html,body,#map{height:100%;width:100%;margin:0}#map{background:#edf3ed}.leaflet-control-attribution{font-size:10px!important}</style></head><body><div id='map'></div><script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script><script>const map=L.map('map').setView([22.8456,89.5403],13);L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);let marker=null;window.updatePartnerPin=(lat,lon)=>{const point=[lat,lon];if(!marker)marker=L.marker(point).addTo(map).bindPopup('Service partner');else marker.setLatLng(point);map.setView(point,16);setTimeout(()=>map.invalidateSize(true),100)};</script></body></html>";
+    }
+
+    private String encodePath(String value) {
+        try { return java.net.URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replace("+", "%20"); }
+        catch (Exception ignored) { return value; }
     }
 
     private boolean canCustomerManage(String value) { return "booking_received".equals(value) || "confirmed".equals(value); }

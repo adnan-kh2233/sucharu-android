@@ -49,6 +49,8 @@ public class StaffPortalActivity extends AppCompatActivity {
     private LinearLayout page, section;
     private ActivityResultLauncher<String> agreementSaveLauncher;
     private ActivityResultLauncher<String> partnerNotificationPermission;
+    private ActivityResultLauncher<String[]> partnerLocationPermission;
+    private String pendingLocationBookingId;
     private boolean partnerAssignmentReceiverRegistered;
     private final BroadcastReceiver partnerAssignmentReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
@@ -60,8 +62,22 @@ public class StaffPortalActivity extends AppCompatActivity {
         super.onCreate(state);
         agreementSaveLauncher = registerForActivityResult(new ActivityResultContracts.CreateDocument(), this::saveAgreementPdf);
         partnerNotificationPermission = registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
-            if (granted) registerPartnerDeviceToken();
-            else toast("Turn on notifications to receive new job alerts when Sucharu is closed.");
+            if (granted) {
+                registerPartnerDeviceToken();
+                if (pendingLocationBookingId != null) requestPartnerLocationPermission(pendingLocationBookingId);
+            } else {
+                if (pendingLocationBookingId != null) toast("Allow notifications so Android can keep the location sharing indicator visible.");
+                else toast("Turn on notifications to receive new job alerts when Sucharu is closed.");
+                pendingLocationBookingId = null;
+            }
+        });
+        partnerLocationPermission = registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), grants -> {
+            boolean granted = Boolean.TRUE.equals(grants.get(Manifest.permission.ACCESS_FINE_LOCATION))
+                    || Boolean.TRUE.equals(grants.get(Manifest.permission.ACCESS_COARSE_LOCATION))
+                    || ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                    || ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED;
+            if (granted && pendingLocationBookingId != null) startPartnerLocationService(pendingLocationBookingId);
+            else { pendingLocationBookingId = null; toast("Location sharing stayed off. Allow location permission to share your trip with the customer."); }
         });
         role = getIntent().getStringExtra(EXTRA_ROLE);
         if (!"admin".equals(role) && !"partner".equals(role)) role = "admin";
@@ -755,9 +771,63 @@ public class StaffPortalActivity extends AppCompatActivity {
         String label = "on_the_way".equals(next) ? "Mark on the way" : "service_started".equals(next) ? "Start service" : "completed".equals(next) ? "Mark completed" : "Completed";
         if (!next.isEmpty()) addButton(content, label, v -> {
             JSONObject body = new JSONObject(); try { body.put("status", next); } catch (Exception ignored) { }
-            ApiClient.patch("/partner/jobs/" + encode(bookingId) + "/status", body, token, (code, response, array, err) -> { if (ready(err)) loadPartnerJobs(); });
+            ApiClient.patch("/partner/jobs/" + encode(bookingId) + "/status", body, token, (code, response, array, err) -> {
+                if (ready(err)) {
+                    if ("on_the_way".equals(next)) requestPartnerLocationSharing(bookingId);
+                    else if ("service_started".equals(next) || "completed".equals(next)) stopPartnerLocationService();
+                    loadPartnerJobs();
+                }
+            });
         }, false);
+        if ("on_the_way".equals(status) && !isLocationSharing(bookingId)) {
+            addButton(content, "Start location sharing", v -> requestPartnerLocationSharing(bookingId), false);
+            content.addView(text("The customer sees your last location only while you are on the way. You can stop sharing from the phone notification.", 12, MUTED, false), marginTop(5));
+        }
         section.addView(card, marginTop(10));
+    }
+
+    private boolean isLocationSharing(String bookingId) {
+        return bookingId.equals(getSharedPreferences("partner_location", MODE_PRIVATE).getString("active_booking", ""));
+    }
+
+    private void requestPartnerLocationSharing(String bookingId) {
+        if (token == null || token.isEmpty()) { toast("Sign in to the partner portal before sharing location."); return; }
+        pendingLocationBookingId = bookingId;
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            partnerNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS);
+            return;
+        }
+        requestPartnerLocationPermission(bookingId);
+    }
+
+    private void requestPartnerLocationPermission(String bookingId) {
+        boolean fine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        boolean coarse = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        if (!fine && !coarse) {
+            partnerLocationPermission.launch(new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION});
+            return;
+        }
+        startPartnerLocationService(bookingId);
+    }
+
+    private void startPartnerLocationService(String bookingId) {
+        if (token == null || token.isEmpty()) { toast("Partner session expired. Sign in again to share location."); return; }
+        pendingLocationBookingId = null;
+        Intent intent = new Intent(this, PartnerLocationService.class);
+        intent.putExtra(PartnerLocationService.EXTRA_BOOKING_ID, bookingId);
+        intent.putExtra(PartnerLocationService.EXTRA_TOKEN, token);
+        try {
+            if (Build.VERSION.SDK_INT >= 26) ContextCompat.startForegroundService(this, intent);
+            else startService(intent);
+            toast("Location sharing started for this trip. A phone notification is now visible.");
+        } catch (SecurityException error) {
+            toast("Could not start location sharing. Check location and notification permissions.");
+        }
+    }
+
+    private void stopPartnerLocationService() {
+        Intent intent = new Intent(this, PartnerLocationService.class).setAction(PartnerLocationService.ACTION_STOP);
+        startService(intent);
     }
 
     private void addInfoCard(String heading, String details) {
