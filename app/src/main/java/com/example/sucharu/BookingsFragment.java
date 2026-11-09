@@ -25,6 +25,7 @@ import android.widget.ScrollView;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.app.Dialog;
+import android.app.DatePickerDialog;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
@@ -56,7 +57,10 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.List;
+import java.util.Locale;
+import java.text.SimpleDateFormat;
 
 public class BookingsFragment extends Fragment {
     private static final String[] PROGRESS_STATUSES = {
@@ -158,7 +162,7 @@ public class BookingsFragment extends Fragment {
                 if (error != null) { status.setText(error); return; }
                 JSONArray rows = array == null ? new JSONArray() : array;
                 if (rows.length() == 0) { status.setText("No bookings yet. Your service requests will appear here."); return; }
-                status.setText("Showing your recent service requests.");
+                status.setText("Showing all " + rows.length() + " service request(s) in your account history.");
                 for (int i = 0; i < rows.length(); i++) {
                     JSONObject row = rows.optJSONObject(i);
                     if (row != null) list.addView(bookingCard(row));
@@ -229,6 +233,10 @@ public class BookingsFragment extends Fragment {
             Button manage = new Button(requireContext()); manage.setText("Change date or cancel"); manage.setAllCaps(false);
             manage.setOnClickListener(v -> showManageBooking(row)); content.addView(manage, topMargin(4));
         }
+        if ("completed".equals(bookingStatus) || "cancelled".equals(bookingStatus)) {
+            Button rebook = new Button(requireContext()); rebook.setText("Book this service again"); rebook.setAllCaps(false);
+            rebook.setOnClickListener(v -> showRebookDialog(row)); content.addView(rebook, topMargin(4));
+        }
         if ("completed".equals(bookingStatus) && row.optJSONObject("review") == null) {
             Button review = new Button(requireContext()); review.setText("Rate this service"); review.setAllCaps(false);
             review.setOnClickListener(v -> showReviewDialog(row)); content.addView(review, topMargin(4));
@@ -237,6 +245,75 @@ public class BookingsFragment extends Fragment {
             content.addView(Ui.text(requireContext(), "Your rating · " + review.optInt("rating") + "/5" + (review.optString("comment").isEmpty() ? "" : "\n" + review.optString("comment")), 13, Ui.MUTED, false), topMargin(6));
         }
         return card;
+    }
+
+    private void showRebookDialog(JSONObject previous) {
+        LinearLayout form = new LinearLayout(requireContext()); form.setOrientation(LinearLayout.VERTICAL);
+        form.setPadding(Ui.dp(requireContext(), 20), 0, Ui.dp(requireContext(), 20), 0);
+        EditText date = new EditText(requireContext()); date.setHint("New date · YYYY-MM-DD");
+        date.setInputType(android.text.InputType.TYPE_CLASS_DATETIME | android.text.InputType.TYPE_DATETIME_VARIATION_DATE); date.setSingleLine(true);
+        Calendar tomorrow = Calendar.getInstance(); tomorrow.add(Calendar.DAY_OF_YEAR, 1);
+        date.setText(new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(tomorrow.getTime()));
+        date.setFocusable(false); date.setOnClickListener(v -> {
+            Calendar selected = Calendar.getInstance(); selected.add(Calendar.DAY_OF_YEAR, 1);
+            DatePickerDialog picker = new DatePickerDialog(requireContext(), (view, year, month, day) -> {
+                Calendar chosen = Calendar.getInstance(); chosen.set(year, month, day);
+                date.setText(new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(chosen.getTime()));
+            }, selected.get(Calendar.YEAR), selected.get(Calendar.MONTH), selected.get(Calendar.DAY_OF_MONTH));
+            picker.getDatePicker().setMinDate(System.currentTimeMillis() - 1000); picker.show();
+        });
+        Spinner time = new Spinner(requireContext());
+        String[] windows = {"09:00 AM - 11:00 AM", "11:00 AM - 01:00 PM", "02:00 PM - 04:00 PM", "04:00 PM - 06:00 PM", "06:00 PM - 08:00 PM"};
+        time.setAdapter(new ArrayAdapter<>(requireContext(), android.R.layout.simple_spinner_dropdown_item, windows));
+        JSONObject previousSchedule = previous.optJSONObject("schedule");
+        if (previousSchedule != null) for (int i = 0; i < windows.length; i++) if (windows[i].equals(previousSchedule.optString("time"))) time.setSelection(i);
+        String[] areas = {"Sonadanga", "Khulna Sadar", "Khalishpur", "Daulatpur", "Other Khulna City Corporation area"};
+        String[] areaValues = {"Sonadanga", "Khulna Sadar", "Khalishpur", "Daulatpur", "other-kcc"};
+        Spinner area = new Spinner(requireContext()); area.setAdapter(new ArrayAdapter<>(requireContext(), android.R.layout.simple_spinner_dropdown_item, areas));
+        for (int i = 0; i < areaValues.length; i++) if (areaValues[i].equals(previous.optString("area"))) area.setSelection(i);
+        EditText address = new EditText(requireContext()); address.setHint("Full service address"); address.setText(previous.optString("address")); address.setMinLines(2); address.setMaxLines(3);
+        EditText landmark = new EditText(requireContext()); landmark.setHint("Nearby landmark (optional)"); landmark.setText(previous.optString("landmark"));
+        EditText note = new EditText(requireContext()); note.setHint("Note for this request (optional)"); note.setMinLines(2); note.setMaxLines(3);
+        String[] paymentLabels = {"Cash on service", "bKash (manual)", "Nagad (manual)"};
+        String[] paymentValues = {"cash_on_service", "bkash_manual", "nagad_manual"};
+        Spinner payment = new Spinner(requireContext()); payment.setAdapter(new ArrayAdapter<>(requireContext(), android.R.layout.simple_spinner_dropdown_item, paymentLabels));
+        for (int i = 0; i < paymentValues.length; i++) if (paymentValues[i].equals(previous.optString("paymentMethod"))) payment.setSelection(i);
+        form.addView(Ui.text(requireContext(), "New preferred date", 12, Ui.MUTED, true)); form.addView(date);
+        form.addView(Ui.text(requireContext(), "Preferred time", 12, Ui.MUTED, true), topMargin(7)); form.addView(time);
+        form.addView(Ui.text(requireContext(), "Service area", 12, Ui.MUTED, true), topMargin(7)); form.addView(area);
+        form.addView(Ui.text(requireContext(), "Address", 12, Ui.MUTED, true), topMargin(7)); form.addView(address);
+        form.addView(landmark, topMargin(5)); form.addView(note, topMargin(5));
+        form.addView(Ui.text(requireContext(), "Payment preference", 12, Ui.MUTED, true), topMargin(7)); form.addView(payment);
+        ScrollView scroll = new ScrollView(requireContext()); scroll.setFillViewport(true); scroll.addView(form);
+        JSONObject service = previous.optJSONObject("service");
+        String serviceName = service == null ? "Service" : service.optString("name", "Service");
+        new MaterialAlertDialogBuilder(requireContext()).setTitle("Book " + serviceName + " again")
+                .setMessage("We filled your previous service and address. Review the details and choose a new date before sending the request.")
+                .setView(scroll).setNegativeButton("Cancel", null).setPositiveButton("Review and submit", (dialog, which) -> {
+                    String addressValue = address.getText().toString().trim(), dateValue = date.getText().toString().trim();
+                    if (addressValue.isEmpty() || dateValue.isEmpty()) { Toast.makeText(requireContext(), "Enter a valid date and service address.", Toast.LENGTH_LONG).show(); return; }
+                    try {
+                        JSONObject schedule = new JSONObject(); schedule.put("date", dateValue); schedule.put("time", windows[time.getSelectedItemPosition()]);
+                        JSONObject body = new JSONObject(); body.put("service", new JSONObject().put("name", serviceName)); body.put("schedule", schedule);
+                        body.put("area", areaValues[area.getSelectedItemPosition()]); body.put("address", addressValue);
+                        body.put("landmark", landmark.getText().toString().trim()); body.put("note", note.getText().toString().trim()); body.put("paymentMethod", paymentValues[payment.getSelectedItemPosition()]);
+                        JSONObject location = previous.optJSONObject("location");
+                        if (location != null && addressValue.equals(previous.optString("address")) && areaValues[area.getSelectedItemPosition()].equals(previous.optString("area"))) {
+                            JSONObject pin = new JSONObject(); pin.put("latitude", location.optDouble("latitude")); pin.put("longitude", location.optDouble("longitude")); body.put("location", pin);
+                        }
+                        CustomerSession.withToken(requireContext(), (token, tokenError) -> {
+                            if (tokenError != null) { Toast.makeText(requireContext(), tokenError, Toast.LENGTH_LONG).show(); return; }
+                            ApiClient.post("/bookings", body, token, (code, response, rows, error) -> {
+                                if (!isAdded()) return;
+                                if (error != null || code < 200 || code >= 300) {
+                                    Toast.makeText(requireContext(), error == null ? response == null ? "Could not submit the new request." : response.optString("message", "Could not submit the new request.") : error, Toast.LENGTH_LONG).show();
+                                    return;
+                                }
+                                Toast.makeText(requireContext(), "New request sent · " + response.optString("bookingId"), Toast.LENGTH_LONG).show(); loadBookings();
+                            });
+                        });
+                    } catch (Exception error) { Toast.makeText(requireContext(), "Could not prepare the new booking.", Toast.LENGTH_LONG).show(); }
+                }).show();
     }
 
     private void showInvoice(JSONObject booking, JSONObject invoice) {
