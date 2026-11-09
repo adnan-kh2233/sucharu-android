@@ -21,10 +21,12 @@ import com.google.android.material.appbar.MaterialToolbar;
 import com.google.android.material.bottomnavigation.BottomNavigationView;
 
 public class MainActivity extends AppCompatActivity {
+    public static final String EXTRA_CUSTOMER_AUTH = "open_customer_auth";
     private static final String STATE_TAB = "selected_customer_tab";
     private int selectedTab = R.id.nav_home;
     private ServiceItem pendingService;
     private ActivityResultLauncher<String> notificationPermission;
+    private boolean customerAuthGate;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -40,6 +42,12 @@ public class MainActivity extends AppCompatActivity {
         BottomNavigationView navigation = findViewById(R.id.bottom_navigation);
         navigation.setOnItemSelectedListener(this::onTabSelected);
         if (savedInstanceState != null) selectedTab = savedInstanceState.getInt(STATE_TAB, R.id.nav_home);
+        else if (getIntent().getBooleanExtra(EXTRA_CUSTOMER_AUTH, false) && !CustomerSession.isSignedIn(this)) {
+            selectedTab = R.id.nav_account;
+            customerAuthGate = true;
+            navigation.setVisibility(View.GONE);
+            toolbar.setNavigationIcon(null);
+        }
         navigation.setSelectedItemId(selectedTab);
         openBookingFromNotification(getIntent());
     }
@@ -137,6 +145,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void showTab(int menuId) {
+        if (customerAuthGate && menuId != R.id.nav_account) return;
         BottomNavigationView navigation = findViewById(R.id.bottom_navigation);
         if (navigation.getSelectedItemId() == menuId) onTabSelected(navigation.getMenu().findItem(menuId));
         else navigation.setSelectedItemId(menuId);
@@ -159,6 +168,13 @@ public class MainActivity extends AppCompatActivity {
             pendingService = null;
             showTab(R.id.nav_home);
             findViewById(R.id.content_frame).post(() -> requestBooking(service));
+        } else if (getIntent().getBooleanExtra(EXTRA_CUSTOMER_AUTH, false)) {
+            getIntent().removeExtra(EXTRA_CUSTOMER_AUTH);
+            customerAuthGate = false;
+            findViewById(R.id.bottom_navigation).setVisibility(View.VISIBLE);
+            ((MaterialToolbar) findViewById(R.id.toolbar)).setNavigationIcon(R.drawable.ic_menu);
+            selectedTab = R.id.nav_home;
+            showTab(R.id.nav_home);
         } else {
             showTab(selectedTab);
         }

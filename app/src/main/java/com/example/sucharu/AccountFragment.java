@@ -100,8 +100,8 @@ public class AccountFragment extends Fragment {
         view.findViewById(R.id.sign_out).setOnClickListener(v -> {
             CustomerSession.withToken(requireContext(), (authToken, error) -> CustomerSession.removeNotificationToken(requireContext(), authToken));
             CustomerSession.signOut(requireContext());
-            message.setText("");
-            renderSignedOut();
+            startActivity(new android.content.Intent(requireContext(), RoleChooserActivity.class));
+            requireActivity().finish();
         });
         view.findViewById(R.id.view_my_bookings).setOnClickListener(v -> ((MainActivity) requireActivity()).showTab(R.id.nav_bookings));
         view.findViewById(R.id.enable_booking_notifications).setOnClickListener(v -> ((MainActivity) requireActivity()).enableBookingNotifications());
