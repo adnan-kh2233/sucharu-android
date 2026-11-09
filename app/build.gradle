@@ -3,7 +3,7 @@ plugins {
     id 'com.google.gms.google-services'
 }
 
-def sucharuApiBaseUrl = project.findProperty('sucharuApiBaseUrl') ?: 'http://10.0.2.2:5000/api'
+def sucharuApiBaseUrl = project.findProperty('sucharuApiBaseUrl') ?: 'https://sucharu-api.onrender.com/api'
 
 android {
     namespace 'com.example.sucharu'
