@@ -74,6 +74,10 @@
                     <Button android:id="@+id/remove_saved_address" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Remove saved address" />
                 </LinearLayout>
                 <Button android:id="@+id/view_my_bookings" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="14dp" android:text="View my bookings" />
+                <Button android:id="@+id/enable_booking_notifications" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Enable booking notifications" />
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:text="Help &amp; support" android:textColor="@color/brand_ink" android:textSize="17sp" android:textStyle="bold" />
+                <TextView android:id="@+id/support_ticket_summary" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:text="Ask the Sucharu team for help or check your recent requests." android:textColor="@color/brand_muted" android:textSize="13sp" />
+                <Button android:id="@+id/contact_support" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:text="Contact support" />
                 <Button android:id="@+id/sign_out" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Sign out" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>

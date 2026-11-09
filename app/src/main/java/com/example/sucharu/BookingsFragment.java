@@ -9,6 +9,9 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.RatingBar;
+import android.widget.ArrayAdapter;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.ScrollView;
@@ -25,6 +28,8 @@ import org.json.JSONObject;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 public class BookingsFragment extends Fragment {
     private static final String[] PROGRESS_STATUSES = {
@@ -50,6 +55,7 @@ public class BookingsFragment extends Fragment {
         bookingId = view.findViewById(R.id.track_booking_id);
         phone = view.findViewById(R.id.track_phone);
         view.findViewById(R.id.refresh_bookings).setOnClickListener(v -> loadBookings());
+        view.findViewById(R.id.open_notifications).setOnClickListener(v -> loadNotifications());
         view.findViewById(R.id.track_button).setOnClickListener(v -> trackBooking());
         loadBookings();
     }
@@ -117,7 +123,111 @@ public class BookingsFragment extends Fragment {
         details.setPadding(0, Ui.dp(requireContext(), 10), 0, Ui.dp(requireContext(), 2));
         details.setOnClickListener(v -> showProgressTimeline(row));
         content.addView(details);
+        if (canCustomerManage(bookingStatus)) {
+            Button manage = new Button(requireContext()); manage.setText("Change date or cancel"); manage.setAllCaps(false);
+            manage.setOnClickListener(v -> showManageBooking(row)); content.addView(manage, topMargin(4));
+        }
+        if ("completed".equals(bookingStatus) && row.optJSONObject("review") == null) {
+            Button review = new Button(requireContext()); review.setText("Rate this service"); review.setAllCaps(false);
+            review.setOnClickListener(v -> showReviewDialog(row)); content.addView(review, topMargin(4));
+        } else if (row.optJSONObject("review") != null) {
+            JSONObject review = row.optJSONObject("review");
+            content.addView(Ui.text(requireContext(), "Your rating · " + review.optInt("rating") + "/5" + (review.optString("comment").isEmpty() ? "" : "\n" + review.optString("comment")), 13, Ui.MUTED, false), topMargin(6));
+        }
         return card;
+    }
+
+    private boolean canCustomerManage(String value) { return "booking_received".equals(value) || "confirmed".equals(value); }
+
+    private void showManageBooking(JSONObject row) {
+        String bookingId = row.optString("bookingId");
+        new MaterialAlertDialogBuilder(requireContext()).setTitle("Manage booking")
+                .setItems(new String[]{"Reschedule", "Cancel booking", "Keep booking"}, (dialog, which) -> {
+                    if (which == 0) showRescheduleDialog(row);
+                    else if (which == 1) confirmCancelBooking(bookingId);
+                }).show();
+    }
+
+    private void showRescheduleDialog(JSONObject row) {
+        LinearLayout form = new LinearLayout(requireContext()); form.setOrientation(LinearLayout.VERTICAL); form.setPadding(Ui.dp(requireContext(), 20), 0, Ui.dp(requireContext(), 20), 0);
+        EditText date = new EditText(requireContext()); date.setHint("New date · YYYY-MM-DD"); date.setInputType(android.text.InputType.TYPE_CLASS_DATETIME | android.text.InputType.TYPE_DATETIME_VARIATION_DATE); date.setSingleLine(true);
+        JSONObject current = row.optJSONObject("schedule"); if (current != null) date.setText(current.optString("date", ""));
+        Spinner time = new Spinner(requireContext()); String[] windows = {"09:00 AM - 11:00 AM", "11:00 AM - 01:00 PM", "02:00 PM - 04:00 PM", "04:00 PM - 06:00 PM", "06:00 PM - 08:00 PM"};
+        time.setAdapter(new ArrayAdapter<>(requireContext(), android.R.layout.simple_spinner_dropdown_item, windows));
+        form.addView(date); form.addView(time);
+        if (current != null) for (int i = 0; i < windows.length; i++) if (windows[i].equals(current.optString("time"))) time.setSelection(i);
+        new MaterialAlertDialogBuilder(requireContext()).setTitle("Choose a new time")
+                .setMessage("You can reschedule up to 3 times before a partner is assigned.")
+                .setView(form).setNegativeButton("Back", null).setPositiveButton("Save new time", (d, w) -> {
+                    try {
+                        JSONObject body = new JSONObject(); body.put("date", date.getText().toString().trim()); body.put("time", time.getSelectedItem().toString());
+                        CustomerSession.withToken(requireContext(), (token, tokenError) -> {
+                            if (tokenError != null) { Toast.makeText(requireContext(), tokenError, Toast.LENGTH_LONG).show(); return; }
+                            ApiClient.patch("/customers/bookings/" + row.optString("bookingId") + "/schedule", body, token, (code, object, array, error) -> {
+                                if (!isAdded()) return;
+                                Toast.makeText(requireContext(), error == null && code < 300 ? "Booking rescheduled." : error == null ? object.optString("message", "Could not reschedule.") : error, Toast.LENGTH_LONG).show();
+                                if (error == null && code >= 200 && code < 300) loadBookings();
+                            });
+                        });
+                    } catch (Exception ignored) { }
+                }).show();
+    }
+
+    private void confirmCancelBooking(String bookingId) {
+        EditText reason = new EditText(requireContext()); reason.setHint("Reason (optional)"); reason.setMaxLines(3);
+        new MaterialAlertDialogBuilder(requireContext()).setTitle("Cancel this booking?")
+                .setMessage("You can cancel before a service partner is assigned.").setView(reason)
+                .setNegativeButton("Keep booking", null).setPositiveButton("Cancel booking", (d, w) -> {
+                    try {
+                        JSONObject body = new JSONObject(); body.put("reason", reason.getText().toString().trim());
+                        CustomerSession.withToken(requireContext(), (token, tokenError) -> {
+                            if (tokenError != null) { Toast.makeText(requireContext(), tokenError, Toast.LENGTH_LONG).show(); return; }
+                            ApiClient.post("/customers/bookings/" + bookingId + "/cancel", body, token, (code, object, array, error) -> {
+                                if (!isAdded()) return;
+                                Toast.makeText(requireContext(), error == null && code < 300 ? "Booking cancelled." : error == null ? object.optString("message", "Could not cancel this booking.") : error, Toast.LENGTH_LONG).show();
+                                if (error == null && code >= 200 && code < 300) loadBookings();
+                            });
+                        });
+                    } catch (Exception ignored) { }
+                }).show();
+    }
+
+    private void showReviewDialog(JSONObject row) {
+        LinearLayout form = new LinearLayout(requireContext()); form.setOrientation(LinearLayout.VERTICAL); form.setPadding(Ui.dp(requireContext(), 20), 0, Ui.dp(requireContext(), 20), 0);
+        RatingBar rating = new RatingBar(requireContext()); rating.setNumStars(5); rating.setStepSize(1f); rating.setRating(5f);
+        EditText comment = new EditText(requireContext()); comment.setHint("Tell us about your experience (optional)"); comment.setMinLines(3); comment.setMaxLines(5); comment.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE); comment.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(1000)});
+        form.addView(rating); form.addView(comment);
+        new MaterialAlertDialogBuilder(requireContext()).setTitle("Rate your service").setView(form).setNegativeButton("Later", null)
+                .setPositiveButton("Submit review", (d, w) -> {
+                    try {
+                        JSONObject body = new JSONObject(); body.put("rating", (int) rating.getRating()); body.put("comment", comment.getText().toString().trim());
+                        CustomerSession.withToken(requireContext(), (token, tokenError) -> {
+                            if (tokenError != null) { Toast.makeText(requireContext(), tokenError, Toast.LENGTH_LONG).show(); return; }
+                            ApiClient.post("/customers/bookings/" + row.optString("bookingId") + "/review", body, token, (code, object, array, error) -> {
+                                if (!isAdded()) return;
+                                Toast.makeText(requireContext(), error == null && code < 300 ? "Thank you for your review." : error == null ? object.optString("message", "Could not submit review.") : error, Toast.LENGTH_LONG).show();
+                                if (error == null && code >= 200 && code < 300) loadBookings();
+                            });
+                        });
+                    } catch (Exception ignored) { }
+                }).show();
+    }
+
+    private void loadNotifications() {
+        CustomerSession.withToken(requireContext(), (token, tokenError) -> {
+            if (tokenError != null) { Toast.makeText(requireContext(), tokenError, Toast.LENGTH_LONG).show(); return; }
+            ApiClient.get("/customers/notifications", token, (code, object, rows, error) -> {
+                if (!isAdded()) return;
+                JSONArray notifications = rows == null ? new JSONArray() : rows;
+                List<String> labels = new ArrayList<>();
+                for (int i = 0; i < notifications.length(); i++) { JSONObject item = notifications.optJSONObject(i); if (item != null) labels.add((item.isNull("readAt") ? "● " : "") + item.optString("title") + "\n" + item.optString("body")); }
+                if (labels.isEmpty()) { new MaterialAlertDialogBuilder(requireContext()).setTitle("Notifications").setMessage("You are all caught up.").setPositiveButton("Done", null).show(); return; }
+                new MaterialAlertDialogBuilder(requireContext()).setTitle("Notifications").setItems(labels.toArray(new String[0]), (dialog, index) -> {
+                    JSONObject item = notifications.optJSONObject(index);
+                    if (item != null && item.isNull("readAt")) ApiClient.patch("/customers/notifications/" + item.optString("id") + "/read", new JSONObject(), token, (s, o, a, e) -> { });
+                }).setPositiveButton("Done", null).show();
+            });
+        });
     }
 
     private View progressSummary(String bookingStatus) {

@@ -10,6 +10,7 @@
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:text="My bookings" android:textColor="@color/brand_ink" android:textSize="24sp" android:textStyle="bold" />
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="3dp" android:text="Track progress and revisit your service requests." android:textColor="@color/brand_muted" android:textSize="14sp" />
         <Button android:id="@+id/refresh_bookings" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="end" android:layout_marginTop="4dp" android:text="Refresh" />
+        <Button android:id="@+id/open_notifications" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:text="Notifications" />
         <TextView android:id="@+id/bookings_status" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:textColor="@color/brand_muted" android:textSize="13sp" />
         <LinearLayout android:id="@+id/bookings_list" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
 

@@ -9,14 +9,18 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.LinearLayout;
 import android.widget.ArrayAdapter;
 import android.widget.Spinner;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.Locale;
@@ -94,11 +98,14 @@ public class AccountFragment extends Fragment {
         view.findViewById(R.id.reset_back_to_login).setOnClickListener(v -> setMode(false));
         submit.setOnClickListener(v -> submit());
         view.findViewById(R.id.sign_out).setOnClickListener(v -> {
+            CustomerSession.withToken(requireContext(), (authToken, error) -> CustomerSession.removeNotificationToken(requireContext(), authToken));
             CustomerSession.signOut(requireContext());
             message.setText("");
             renderSignedOut();
         });
         view.findViewById(R.id.view_my_bookings).setOnClickListener(v -> ((MainActivity) requireActivity()).showTab(R.id.nav_bookings));
+        view.findViewById(R.id.enable_booking_notifications).setOnClickListener(v -> ((MainActivity) requireActivity()).enableBookingNotifications());
+        view.findViewById(R.id.contact_support).setOnClickListener(v -> showSupportDialog());
         view.findViewById(R.id.edit_saved_address).setOnClickListener(v -> savedAddressEditor.setVisibility(savedAddressEditor.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
         view.findViewById(R.id.edit_customer_profile).setOnClickListener(v -> {
             if (customerProfileEditor.getVisibility() == View.VISIBLE) customerProfileEditor.setVisibility(View.GONE);
@@ -305,9 +312,53 @@ public class AccountFragment extends Fragment {
                 if (customer != null) {
                     CustomerSession.saveDefaultAddress(requireContext(), customer.optJSONObject("defaultAddress"));
                     renderProfile(customer.optString("name"), customer.optString("phone"), customer.optString("email"), customer.optJSONObject("defaultAddress"));
+                    loadSupportTickets();
                 }
             });
         });
+    }
+
+    private void loadSupportTickets() {
+        CustomerSession.withToken(requireContext(), (token, tokenError) -> {
+            if (tokenError != null || !isAdded()) return;
+            ApiClient.get("/customers/support", token, (status, object, tickets, error) -> {
+                if (!isAdded() || error != null) return;
+                TextView summary = requireView().findViewById(R.id.support_ticket_summary);
+                if (tickets == null || tickets.length() == 0) { summary.setText("Ask the Sucharu team for help or check your recent requests."); return; }
+                StringBuilder text = new StringBuilder("Recent requests\n");
+                for (int i = 0; i < Math.min(tickets.length(), 3); i++) {
+                    JSONObject ticket = tickets.optJSONObject(i); if (ticket == null) continue;
+                    text.append(ticket.optString("ticketId")).append(" · ").append(ticket.optString("status").replace('_', ' '));
+                    if (!ticket.optString("lastReply").isEmpty()) text.append("\n").append(ticket.optString("lastReply"));
+                    text.append("\n");
+                }
+                summary.setText(text.toString().trim());
+            });
+        });
+    }
+
+    private void showSupportDialog() {
+        LinearLayout form = new LinearLayout(requireContext()); form.setOrientation(LinearLayout.VERTICAL); form.setPadding(Ui.dp(requireContext(), 20), 0, Ui.dp(requireContext(), 20), 0);
+        Spinner category = new Spinner(requireContext()); String[] labels = {"General", "Booking", "Payment", "Partner", "Other"}, values = {"general", "booking", "payment", "partner", "other"};
+        category.setAdapter(new ArrayAdapter<>(requireContext(), android.R.layout.simple_spinner_dropdown_item, labels));
+        EditText subject = new EditText(requireContext()); subject.setHint("Subject"); subject.setSingleLine(true);
+        EditText bookingId = new EditText(requireContext()); bookingId.setHint("Booking ID (optional)"); bookingId.setSingleLine(true);
+        EditText message = new EditText(requireContext()); message.setHint("How can we help? (10–2000 characters)"); message.setMinLines(3); message.setMaxLines(5); message.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE); message.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(2000)});
+        form.addView(category); form.addView(subject); form.addView(bookingId); form.addView(message);
+        new MaterialAlertDialogBuilder(requireContext()).setTitle("Contact Sucharu support").setView(form).setNegativeButton("Cancel", null)
+                .setPositiveButton("Send request", (dialog, which) -> {
+                    try {
+                        JSONObject body = new JSONObject(); body.put("category", values[category.getSelectedItemPosition()]); body.put("subject", subject.getText().toString().trim()); body.put("bookingId", bookingId.getText().toString().trim()); body.put("message", message.getText().toString().trim());
+                        CustomerSession.withToken(requireContext(), (token, tokenError) -> {
+                            if (tokenError != null) { Toast.makeText(requireContext(), tokenError, Toast.LENGTH_LONG).show(); return; }
+                            ApiClient.post("/customers/support", body, token, (code, result, rows, error) -> {
+                                if (!isAdded()) return;
+                                Toast.makeText(requireContext(), error == null && code < 300 ? "Support request " + result.optString("ticketId") + " sent." : error == null ? result.optString("message", "Could not send support request.") : error, Toast.LENGTH_LONG).show();
+                                if (error == null && code >= 200 && code < 300) loadSupportTickets();
+                            });
+                        });
+                    } catch (Exception ignored) { }
+                }).show();
     }
 
     private void updatePinStatus() {

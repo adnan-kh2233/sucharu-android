@@ -7,6 +7,7 @@ import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 import com.google.android.gms.tasks.Task;
 import com.google.firebase.auth.GetTokenResult;
+import com.google.firebase.messaging.FirebaseMessaging;
 
 import org.json.JSONObject;
 
@@ -100,5 +101,28 @@ public final class CustomerSession {
     public static void signOut(Context context) {
         FirebaseAuth.getInstance().signOut();
         prefs(context).edit().clear().apply();
+    }
+
+    public static void syncNotificationToken(Context context) {
+        FirebaseMessaging.getInstance().getToken().addOnSuccessListener(token -> {
+            if (token == null || token.isEmpty()) return;
+            withToken(context, (authToken, error) -> {
+                if (error != null || authToken == null) return;
+                try {
+                    JSONObject body = new JSONObject(); body.put("token", token); body.put("platform", "android");
+                    ApiClient.post("/customers/device-tokens", body, authToken, (status, object, array, requestError) -> { });
+                } catch (Exception ignored) { }
+            });
+        });
+    }
+
+    public static void removeNotificationToken(Context context, String authToken) {
+        FirebaseMessaging.getInstance().getToken().addOnSuccessListener(token -> {
+            if (token == null || token.isEmpty() || authToken == null || authToken.isEmpty()) return;
+            try {
+                JSONObject body = new JSONObject(); body.put("token", token); body.put("action", "delete");
+                ApiClient.post("/customers/device-tokens", body, authToken, (status, object, array, error) -> { });
+            } catch (Exception ignored) { }
+        });
     }
 }

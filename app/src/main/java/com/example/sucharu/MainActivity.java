@@ -1,6 +1,10 @@
 package com.example.sucharu;
 
 import android.os.Bundle;
+import android.Manifest;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.view.MenuItem;
 import android.view.View;
 import android.widget.Toast;
@@ -9,6 +13,9 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.fragment.app.Fragment;
 import androidx.appcompat.widget.PopupMenu;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.core.content.ContextCompat;
 
 import com.google.android.material.appbar.MaterialToolbar;
 import com.google.android.material.bottomnavigation.BottomNavigationView;
@@ -17,10 +24,15 @@ public class MainActivity extends AppCompatActivity {
     private static final String STATE_TAB = "selected_customer_tab";
     private int selectedTab = R.id.nav_home;
     private ServiceItem pendingService;
+    private ActivityResultLauncher<String> notificationPermission;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        notificationPermission = registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {
+            if (granted) CustomerSession.syncNotificationToken(this);
+            else Toast.makeText(this, "You can enable booking updates later in Android settings.", Toast.LENGTH_LONG).show();
+        });
         setContentView(R.layout.activity_main);
         MaterialToolbar toolbar = findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
@@ -29,6 +41,27 @@ public class MainActivity extends AppCompatActivity {
         navigation.setOnItemSelectedListener(this::onTabSelected);
         if (savedInstanceState != null) selectedTab = savedInstanceState.getInt(STATE_TAB, R.id.nav_home);
         navigation.setSelectedItemId(selectedTab);
+        openBookingFromNotification(getIntent());
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        openBookingFromNotification(intent);
+    }
+
+    private void openBookingFromNotification(Intent intent) {
+        String bookingId = intent == null ? null : intent.getStringExtra("notification_booking_id");
+        if (bookingId != null && !bookingId.isEmpty()) showTab(R.id.nav_bookings);
+    }
+
+    public void enableBookingNotifications() {
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS);
+        } else {
+            CustomerSession.syncNotificationToken(this);
+            Toast.makeText(this, "Booking updates are enabled on this device.", Toast.LENGTH_SHORT).show();
+        }
     }
 
     private void showAppMenu(View anchor) {
@@ -120,6 +153,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     public void onCustomerSessionChanged() {
+        if (CustomerSession.isSignedIn(this) && (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)) CustomerSession.syncNotificationToken(this);
         if (pendingService != null && CustomerSession.isSignedIn(this)) {
             ServiceItem service = pendingService;
             pendingService = null;
