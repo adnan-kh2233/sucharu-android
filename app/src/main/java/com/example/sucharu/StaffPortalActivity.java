@@ -430,8 +430,11 @@ public class StaffPortalActivity extends AppCompatActivity {
 
         if (!"verified".equals(verification)) {
             addButton(content, "Verify partner", v -> {
-                JSONObject body = new JSONObject(); try { body.put("verificationStatus", "verified"); body.put("status", status); } catch (Exception ignored) { }
-                patchPartner(id, body, "Partner verified.");
+                ApiClient.post("/partners/" + encode(id) + "/verify", new JSONObject(), token, (code, result, rows, error) -> {
+                    if (!ready(error)) return;
+                    toast("Partner verified.");
+                    loadAdminPartners();
+                });
             }, false);
         }
         if ("verified".equals(verification) && !"active".equals(status)) {
