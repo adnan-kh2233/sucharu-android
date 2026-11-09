@@ -1,0 +1,8 @@
+<resources>
+    <color name="ops_green">#176B55</color>
+    <color name="ops_green_dark">#103F35</color>
+    <color name="ops_cream">#F8F7F0</color>
+    <color name="ops_ink">#173B35</color>
+    <color name="ops_muted">#66756E</color>
+    <color name="ops_line">#E2E9E1</color>
+</resources>
