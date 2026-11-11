@@ -1,6 +1,7 @@
 package com.example.sucharu;
 
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -15,12 +16,17 @@ import android.widget.ArrayAdapter;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.widget.ImageView;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import com.example.sucharu.databinding.FragmentAccountBinding;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.card.MaterialCardView;
+import com.google.firebase.auth.FirebaseAuth;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -28,6 +34,7 @@ import org.json.JSONObject;
 import java.util.Locale;
 
 public class AccountFragment extends Fragment {
+    private FragmentAccountBinding binding;
     private static final String[] ADDRESS_AREAS = {"Sonadanga", "Khulna Sadar", "Khalishpur", "Daulatpur", "Other Khulna City Corporation area"};
     private static final String[] ADDRESS_AREA_VALUES = {"Sonadanga", "Khulna Sadar", "Khalishpur", "Daulatpur", "other-kcc"};
     private boolean registering = false;
@@ -38,6 +45,9 @@ public class AccountFragment extends Fragment {
     private EditText savedAddressText, savedAddressLandmark, profileEditName, profileEditPhone, profileEditEmail, profileCurrentPassword, profileNewPassword, profileConfirmPassword;
     private Spinner savedAddressArea;
     private Button submit, forgotPassword, resetSendCode, resetComplete;
+    private ImageView profileImage;
+    private TextView profileImageStatus;
+    private ActivityResultLauncher<String> profileImagePicker;
     private TextView message, profileName, profileContact, profileAddressSummary, profileAddressPinStatus, profileAddressMessage, profileEditMessage, intro, title;
     private Double savedLatitude, savedLongitude;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -45,82 +55,91 @@ public class AccountFragment extends Fragment {
     private Runnable resendCountdown;
     private int resendSeconds;
 
+    @Override public void onCreate(@Nullable Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        profileImagePicker = registerForActivityResult(new ActivityResultContracts.GetContent(), this::uploadProfileImage);
+    }
+
     @Nullable @Override public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
-        return inflater.inflate(R.layout.fragment_account, container, false);
+        binding = FragmentAccountBinding.inflate(inflater, container, false);
+        return binding.getRoot();
     }
 
     @Override public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
-        formCard = view.findViewById(R.id.account_form_card);
-        profileCard = view.findViewById(R.id.account_profile_card);
-        customerProfileEditor = view.findViewById(R.id.customer_profile_editor);
-        profileEditName = view.findViewById(R.id.profile_edit_name);
-        profileEditPhone = view.findViewById(R.id.profile_edit_phone);
-        profileEditEmail = view.findViewById(R.id.profile_edit_email);
-        profileCurrentPassword = view.findViewById(R.id.profile_current_password);
-        profileNewPassword = view.findViewById(R.id.profile_new_password);
-        profileConfirmPassword = view.findViewById(R.id.profile_confirm_password);
-        profileEditMessage = view.findViewById(R.id.profile_edit_message);
-        registerFields = view.findViewById(R.id.register_fields);
-        resetFields = view.findViewById(R.id.reset_fields);
-        resetCodeFields = view.findViewById(R.id.reset_code_fields);
-        modeTabs = view.findViewById(R.id.account_mode_tabs);
-        identifier = view.findViewById(R.id.login_identifier);
-        loginPassword = view.findViewById(R.id.login_password);
-        name = view.findViewById(R.id.register_name);
-        phone = view.findViewById(R.id.register_phone);
-        email = view.findViewById(R.id.register_email);
-        registerPassword = view.findViewById(R.id.register_password);
-        resetEmail = view.findViewById(R.id.reset_email);
-        resetCode = view.findViewById(R.id.reset_code);
-        resetNewPassword = view.findViewById(R.id.reset_new_password);
-        resetConfirmPassword = view.findViewById(R.id.reset_confirm_password);
-        forgotPassword = view.findViewById(R.id.forgot_password);
-        resetSendCode = view.findViewById(R.id.reset_send_code);
-        resetComplete = view.findViewById(R.id.reset_complete);
-        submit = view.findViewById(R.id.submit_account);
-        message = view.findViewById(R.id.account_message);
-        profileName = view.findViewById(R.id.profile_name);
-        profileContact = view.findViewById(R.id.profile_contact);
-        profileAddressSummary = view.findViewById(R.id.profile_address_summary);
-        profileAddressPinStatus = view.findViewById(R.id.profile_address_pin_status);
-        profileAddressMessage = view.findViewById(R.id.profile_address_message);
-        savedAddressEditor = view.findViewById(R.id.saved_address_editor);
-        savedAddressText = view.findViewById(R.id.profile_address_text);
-        savedAddressLandmark = view.findViewById(R.id.profile_address_landmark);
-        savedAddressArea = view.findViewById(R.id.profile_address_area);
+        formCard = binding.accountFormCard;
+        profileCard = binding.accountProfileCard;
+        customerProfileEditor = binding.customerProfileEditor;
+        profileEditName = binding.profileEditName;
+        profileEditPhone = binding.profileEditPhone;
+        profileEditEmail = binding.profileEditEmail;
+        profileCurrentPassword = binding.profileCurrentPassword;
+        profileNewPassword = binding.profileNewPassword;
+        profileConfirmPassword = binding.profileConfirmPassword;
+        profileEditMessage = binding.profileEditMessage;
+        registerFields = binding.registerFields;
+        resetFields = binding.resetFields;
+        resetCodeFields = binding.resetCodeFields;
+        modeTabs = binding.accountModeTabs;
+        identifier = binding.loginIdentifier;
+        loginPassword = binding.loginPassword;
+        name = binding.registerName;
+        phone = binding.registerPhone;
+        email = binding.registerEmail;
+        registerPassword = binding.registerPassword;
+        resetEmail = binding.resetEmail;
+        resetCode = binding.resetCode;
+        resetNewPassword = binding.resetNewPassword;
+        resetConfirmPassword = binding.resetConfirmPassword;
+        forgotPassword = binding.forgotPassword;
+        resetSendCode = binding.resetSendCode;
+        resetComplete = binding.resetComplete;
+        submit = binding.submitAccount;
+        message = binding.accountMessage;
+        profileName = binding.profileName;
+        profileImage = binding.profileImage;
+        profileImageStatus = binding.profileImageStatus;
+        profileContact = binding.profileContact;
+        profileAddressSummary = binding.profileAddressSummary;
+        profileAddressPinStatus = binding.profileAddressPinStatus;
+        profileAddressMessage = binding.profileAddressMessage;
+        savedAddressEditor = binding.savedAddressEditor;
+        savedAddressText = binding.profileAddressText;
+        savedAddressLandmark = binding.profileAddressLandmark;
+        savedAddressArea = binding.profileAddressArea;
         savedAddressArea.setAdapter(new ArrayAdapter<>(requireContext(), android.R.layout.simple_spinner_dropdown_item, ADDRESS_AREAS));
-        intro = view.findViewById(R.id.account_intro);
-        title = view.findViewById(R.id.account_title);
+        intro = binding.accountIntro;
+        title = binding.accountTitle;
         addPublicContactCard(view);
 
-        view.findViewById(R.id.show_login).setOnClickListener(v -> setMode(false));
-        view.findViewById(R.id.show_register).setOnClickListener(v -> setMode(true));
+        binding.showLogin.setOnClickListener(v -> setMode(false));
+        binding.showRegister.setOnClickListener(v -> setMode(true));
         forgotPassword.setOnClickListener(v -> setResetMode());
         resetSendCode.setOnClickListener(v -> sendResetCode());
         resetComplete.setOnClickListener(v -> completePasswordReset());
-        view.findViewById(R.id.reset_back_to_login).setOnClickListener(v -> setMode(false));
+        binding.resetBackToLogin.setOnClickListener(v -> setMode(false));
         submit.setOnClickListener(v -> submit());
-        view.findViewById(R.id.sign_out).setOnClickListener(v -> {
+        binding.signOut.setOnClickListener(v -> {
             CustomerSession.withToken(requireContext(), (authToken, error) -> CustomerSession.removeNotificationToken(requireContext(), authToken));
             CustomerSession.signOut(requireContext());
             startActivity(new android.content.Intent(requireContext(), RoleChooserActivity.class));
             requireActivity().finish();
         });
-        view.findViewById(R.id.view_my_bookings).setOnClickListener(v -> ((MainActivity) requireActivity()).showTab(R.id.nav_bookings));
-        view.findViewById(R.id.enable_booking_notifications).setOnClickListener(v -> ((MainActivity) requireActivity()).enableBookingNotifications());
-        view.findViewById(R.id.contact_support).setOnClickListener(v -> showSupportDialog());
-        view.findViewById(R.id.edit_saved_address).setOnClickListener(v -> savedAddressEditor.setVisibility(savedAddressEditor.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
-        view.findViewById(R.id.edit_customer_profile).setOnClickListener(v -> {
+        binding.viewMyBookings.setOnClickListener(v -> ((MainActivity) requireActivity()).showTab(R.id.nav_bookings));
+        binding.enableBookingNotifications.setOnClickListener(v -> ((MainActivity) requireActivity()).enableBookingNotifications());
+        binding.contactSupport.setOnClickListener(v -> showSupportDialog());
+        binding.editSavedAddress.setOnClickListener(v -> savedAddressEditor.setVisibility(savedAddressEditor.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
+        binding.editCustomerProfile.setOnClickListener(v -> {
             if (customerProfileEditor.getVisibility() == View.VISIBLE) customerProfileEditor.setVisibility(View.GONE);
             else { profileEditName.setText(CustomerSession.getName(requireContext())); profileEditPhone.setText(CustomerSession.getPhone(requireContext())); profileEditEmail.setText(CustomerSession.getEmail(requireContext())); profileEditMessage.setText(""); customerProfileEditor.setVisibility(View.VISIBLE); }
         });
-        view.findViewById(R.id.save_customer_profile).setOnClickListener(v -> saveCustomerProfile());
-        view.findViewById(R.id.pick_address_pin).setOnClickListener(v -> MapPinPicker.show(requireActivity(), savedLatitude, savedLongitude, (latitude, longitude) -> {
+        binding.saveCustomerProfile.setOnClickListener(v -> saveCustomerProfile());
+        binding.changeProfileImage.setOnClickListener(v -> profileImagePicker.launch("image/*"));
+        binding.pickAddressPin.setOnClickListener(v -> MapPinPicker.show(requireActivity(), savedLatitude, savedLongitude, (latitude, longitude) -> {
             savedLatitude = latitude; savedLongitude = longitude;
             updatePinStatus();
         }));
-        view.findViewById(R.id.save_saved_address).setOnClickListener(v -> saveSavedAddress());
-        view.findViewById(R.id.remove_saved_address).setOnClickListener(v -> removeSavedAddress());
+        binding.saveSavedAddress.setOnClickListener(v -> saveSavedAddress());
+        binding.removeSavedAddress.setOnClickListener(v -> removeSavedAddress());
 
         if (CustomerSession.isSignedIn(requireContext())) loadProfile();
         else renderSignedOut();
@@ -304,6 +323,7 @@ public class AccountFragment extends Fragment {
 
     @Override public void onDestroyView() {
         cancelResendCountdown();
+        binding = null;
         super.onDestroyView();
     }
 
@@ -324,6 +344,7 @@ public class AccountFragment extends Fragment {
         title.setText("Welcome to Sucharu");
         intro.setText("Your profile is ready for service requests.");
         profileName.setText(customerName == null || customerName.isEmpty() ? "Customer" : customerName);
+        FirebaseImageStorage.loadInto(CustomerSession.getProfileImageUrl(requireContext()), profileImage, R.drawable.ic_profile_placeholder);
         String contact = customerPhone == null ? "" : customerPhone;
         if (customerEmail != null && !customerEmail.isEmpty()) contact += (contact.isEmpty() ? "" : " · ") + customerEmail;
         profileContact.setText(contact);
@@ -362,6 +383,7 @@ public class AccountFragment extends Fragment {
                 if (!isAdded() || error != null || object == null) return;
                 JSONObject customer = object.optJSONObject("customer");
                 if (customer != null) {
+                    CustomerSession.saveCustomerProfile(requireContext(), customer);
                     CustomerSession.saveDefaultAddress(requireContext(), customer.optJSONObject("defaultAddress"));
                     renderProfile(customer.optString("name"), customer.optString("phone"), customer.optString("email"), customer.optJSONObject("defaultAddress"));
                     loadSupportTickets();
@@ -375,7 +397,7 @@ public class AccountFragment extends Fragment {
             if (tokenError != null || !isAdded()) return;
             ApiClient.get("/customers/support", token, (status, object, tickets, error) -> {
                 if (!isAdded() || error != null) return;
-                TextView summary = requireView().findViewById(R.id.support_ticket_summary);
+                TextView summary = binding.supportTicketSummary;
                 if (tickets == null || tickets.length() == 0) { summary.setText("Ask the Sucharu team for help or check your recent requests."); return; }
                 StringBuilder text = new StringBuilder("Recent requests\n");
                 for (int i = 0; i < Math.min(tickets.length(), 3); i++) {
@@ -385,6 +407,60 @@ public class AccountFragment extends Fragment {
                     text.append("\n");
                 }
                 summary.setText(text.toString().trim());
+            });
+        });
+    }
+
+    private void uploadProfileImage(Uri uri) {
+        if (uri == null || !isAdded()) return;
+        profileImageStatus.setText("Preparing secure upload…");
+        binding.changeProfileImage.setEnabled(false);
+        CustomerSession.ensureFirebaseCustomerSession(requireContext(), authError -> {
+            if (!isAdded()) return;
+            if (authError != null || FirebaseAuth.getInstance().getCurrentUser() == null) {
+                binding.changeProfileImage.setEnabled(true);
+                profileImageStatus.setText(authError == null ? "Firebase sign-in is unavailable." : authError);
+                return;
+            }
+            String uid = FirebaseAuth.getInstance().getCurrentUser().getUid();
+            String path = "customers/" + uid + "/profile/" + java.util.UUID.randomUUID() + ".jpg";
+            FirebaseImageStorage.upload(requireContext(), uri, path, new FirebaseImageStorage.UploadListener() {
+                @Override public void onProgress(int percent) {
+                    if (isAdded() && binding != null) requireActivity().runOnUiThread(() -> { if (binding != null) profileImageStatus.setText("Uploading profile photo… " + percent + "%"); });
+                }
+                @Override public void onFailure(Exception error) {
+                    if (!isAdded() || binding == null) return;
+                    requireActivity().runOnUiThread(() -> {
+                        if (binding == null) return;
+                        binding.changeProfileImage.setEnabled(true);
+                        profileImageStatus.setText(error.getMessage() == null ? "Could not upload profile photo." : error.getMessage());
+                    });
+                }
+                @Override public void onSuccess(String downloadUrl) {
+                    if (isAdded() && binding != null) requireActivity().runOnUiThread(() -> { if (binding != null) saveProfileImageUrl(downloadUrl); });
+                }
+            });
+        });
+    }
+
+    private void saveProfileImageUrl(String downloadUrl) {
+        JSONObject body = new JSONObject();
+        try { body.put("profileImageUrl", downloadUrl); }
+        catch (Exception error) { binding.changeProfileImage.setEnabled(true); profileImageStatus.setText("Could not prepare profile update."); return; }
+        CustomerSession.withToken(requireContext(), (token, tokenError) -> {
+            if (!isAdded() || binding == null) return;
+            if (tokenError != null) { binding.changeProfileImage.setEnabled(true); profileImageStatus.setText(tokenError); return; }
+            ApiClient.patch("/customers/me", body, token, (code, response, rows, error) -> {
+                if (!isAdded() || binding == null) return;
+                binding.changeProfileImage.setEnabled(true);
+                JSONObject customer = response == null ? null : response.optJSONObject("customer");
+                if (error != null || code < 200 || code >= 300 || customer == null) {
+                    profileImageStatus.setText(error == null ? "Uploaded, but the profile URL could not be saved." : error);
+                    return;
+                }
+                CustomerSession.saveCustomerProfile(requireContext(), customer);
+                FirebaseImageStorage.loadInto(downloadUrl, profileImage, R.drawable.ic_profile_placeholder);
+                profileImageStatus.setText("Profile photo saved.");
             });
         });
     }
@@ -432,7 +508,7 @@ public class AccountFragment extends Fragment {
             if (savedLatitude != null && savedLongitude != null) { addressBody.put("latitude", savedLatitude); addressBody.put("longitude", savedLongitude); }
             body.put("defaultAddress", addressBody);
         } catch (Exception exception) { setError("Could not prepare your address."); return; }
-        View save = requireView().findViewById(R.id.save_saved_address); save.setEnabled(false);
+        View save = binding.saveSavedAddress; save.setEnabled(false);
         setAddressMessage("Saving address…", false);
         CustomerSession.withToken(requireContext(), (token, tokenError) -> {
             if (!isAdded()) return;
@@ -476,7 +552,7 @@ public class AccountFragment extends Fragment {
             if (identityChanged || !newPassword.isEmpty()) body.put("currentPassword", currentPassword);
             if (!newPassword.isEmpty()) body.put("newPassword", newPassword);
         } catch (Exception exception) { setProfileMessage("Could not prepare the profile update.", true); return; }
-        View save = requireView().findViewById(R.id.save_customer_profile); save.setEnabled(false);
+        View save = binding.saveCustomerProfile; save.setEnabled(false);
         setProfileMessage("Saving account details…", false);
         CustomerSession.withToken(requireContext(), (token, tokenError) -> {
             if (!isAdded()) return;

@@ -19,6 +19,7 @@ import androidx.core.content.ContextCompat;
 
 import com.google.android.material.appbar.MaterialToolbar;
 import com.google.android.material.bottomnavigation.BottomNavigationView;
+import com.example.sucharu.databinding.ActivityMainBinding;
 
 public class MainActivity extends AppCompatActivity {
     public static final String EXTRA_CUSTOMER_AUTH = "open_customer_auth";
@@ -27,6 +28,7 @@ public class MainActivity extends AppCompatActivity {
     private ServiceItem pendingService;
     private ActivityResultLauncher<String> notificationPermission;
     private boolean customerAuthGate;
+    private ActivityMainBinding binding;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -35,20 +37,24 @@ public class MainActivity extends AppCompatActivity {
             if (granted) CustomerSession.syncNotificationToken(this);
             else Toast.makeText(this, "You can enable booking updates later in Android settings.", Toast.LENGTH_LONG).show();
         });
-        setContentView(R.layout.activity_main);
-        MaterialToolbar toolbar = findViewById(R.id.toolbar);
+        binding = ActivityMainBinding.inflate(getLayoutInflater());
+        setContentView(binding.getRoot());
+        MaterialToolbar toolbar = binding.toolbar;
         setSupportActionBar(toolbar);
         toolbar.setNavigationOnClickListener(v -> showAppMenu(toolbar));
-        BottomNavigationView navigation = findViewById(R.id.bottom_navigation);
+        BottomNavigationView navigation = binding.bottomNavigation;
         navigation.setOnItemSelectedListener(this::onTabSelected);
         if (savedInstanceState != null) selectedTab = savedInstanceState.getInt(STATE_TAB, R.id.nav_home);
         else if (getIntent().getBooleanExtra(EXTRA_CUSTOMER_AUTH, false) && !CustomerSession.isSignedIn(this)) {
             selectedTab = R.id.nav_account;
             customerAuthGate = true;
-            navigation.setVisibility(View.GONE);
+            binding.bottomNavigation.setVisibility(View.GONE);
             toolbar.setNavigationIcon(null);
         }
         navigation.setSelectedItemId(selectedTab);
+        if (CustomerSession.isSignedIn(this)) {
+            CustomerSession.ensureFirebaseCustomerSession(this, ignored -> { });
+        }
         openBookingFromNotification(getIntent());
     }
 
@@ -99,7 +105,7 @@ public class MainActivity extends AppCompatActivity {
         if (id == R.id.top_track_booking || id == R.id.top_bookings) {
             if (selectedTab != R.id.nav_bookings) showTab(R.id.nav_bookings);
             if (id == R.id.top_track_booking) {
-                findViewById(R.id.content_frame).post(() -> {
+                binding.contentFrame.post(() -> {
                     Fragment current = getSupportFragmentManager().findFragmentById(R.id.content_frame);
                     if (current instanceof BookingsFragment) ((BookingsFragment) current).scrollToTracker();
                 });
@@ -114,7 +120,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void postHomeScroll(int targetId) {
-        findViewById(R.id.content_frame).post(() -> {
+        binding.contentFrame.post(() -> {
             getSupportFragmentManager().executePendingTransactions();
             Fragment current = getSupportFragmentManager().findFragmentById(R.id.content_frame);
             if (!(current instanceof HomeFragment)) return;
@@ -146,7 +152,7 @@ public class MainActivity extends AppCompatActivity {
 
     public void showTab(int menuId) {
         if (customerAuthGate && menuId != R.id.nav_account) return;
-        BottomNavigationView navigation = findViewById(R.id.bottom_navigation);
+        BottomNavigationView navigation = binding.bottomNavigation;
         if (navigation.getSelectedItemId() == menuId) onTabSelected(navigation.getMenu().findItem(menuId));
         else navigation.setSelectedItemId(menuId);
     }
@@ -167,18 +173,20 @@ public class MainActivity extends AppCompatActivity {
             ServiceItem service = pendingService;
             pendingService = null;
             showTab(R.id.nav_home);
-            findViewById(R.id.content_frame).post(() -> requestBooking(service));
+            binding.contentFrame.post(() -> requestBooking(service));
         } else if (getIntent().getBooleanExtra(EXTRA_CUSTOMER_AUTH, false)) {
             getIntent().removeExtra(EXTRA_CUSTOMER_AUTH);
             customerAuthGate = false;
-            findViewById(R.id.bottom_navigation).setVisibility(View.VISIBLE);
-            ((MaterialToolbar) findViewById(R.id.toolbar)).setNavigationIcon(R.drawable.ic_menu);
+            binding.bottomNavigation.setVisibility(View.VISIBLE);
+            binding.toolbar.setNavigationIcon(R.drawable.ic_menu);
             selectedTab = R.id.nav_home;
             showTab(R.id.nav_home);
         } else {
             showTab(selectedTab);
         }
     }
+
+    @Override protected void onDestroy() { binding = null; super.onDestroy(); }
 
     @Override
     protected void onSaveInstanceState(@NonNull Bundle outState) {

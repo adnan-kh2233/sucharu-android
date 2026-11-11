@@ -5,8 +5,6 @@ import android.content.SharedPreferences;
 
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
-import com.google.android.gms.tasks.Task;
-import com.google.firebase.auth.GetTokenResult;
 import com.google.firebase.messaging.FirebaseMessaging;
 
 import org.json.JSONObject;
@@ -30,6 +28,7 @@ public final class CustomerSession {
     public static String getName(Context context) { return prefs(context).getString("name", ""); }
     public static String getPhone(Context context) { return prefs(context).getString("phone", ""); }
     public static String getEmail(Context context) { return prefs(context).getString("email", ""); }
+    public static String getProfileImageUrl(Context context) { return prefs(context).getString("profileImageUrl", ""); }
     public static JSONObject getDefaultAddress(Context context) {
         try { String value = prefs(context).getString("defaultAddress", ""); return value.isEmpty() ? null : new JSONObject(value); }
         catch (Exception ignored) { return null; }
@@ -43,6 +42,7 @@ public final class CustomerSession {
                 .putString("name", profile.optString("name", "Customer"))
                 .putString("phone", profile.optString("phone", ""))
                 .putString("email", profile.optString("email", ""))
+                .putString("profileImageUrl", profile.optString("profileImageUrl", prefs(context).getString("profileImageUrl", "")))
                 .apply();
     }
 
@@ -86,7 +86,33 @@ public final class CustomerSession {
             if (token.isEmpty()) { callback.complete("The server did not return a customer session."); return; }
             saveProfile(context, profile, token);
             callback.complete(null);
+            // Keep sign-in fast and preserve compatibility with the current website/API JWT.
+            // Once the protected exchange route is deployed, upgrade this Android session
+            // asynchronously so Firebase Auth can scope Firebase-backed features to this user.
+            ensureFirebaseCustomerSession(context, ignored -> { });
         }
+    }
+
+    public static void ensureFirebaseCustomerSession(Context context, SaveCallback callback) {
+        if (FirebaseAuth.getInstance().getCurrentUser() != null) { callback.complete(null); return; }
+        withToken(context, (apiToken, tokenError) -> {
+            if (tokenError != null || apiToken == null || apiToken.isEmpty()) { callback.complete(tokenError == null ? "Please sign in first." : tokenError); return; }
+            ApiClient.post("/auth/customer/firebase-session", new JSONObject(), apiToken, (status, response, array, error) -> {
+                String customToken = response == null ? "" : response.optString("firebaseCustomToken", "");
+                if (error != null || status < 200 || status >= 300 || customToken.isEmpty()) {
+                    callback.complete(error == null ? "Firebase sign-in is not available yet." : error);
+                    return;
+                }
+                FirebaseAuth.getInstance().signInWithCustomToken(customToken).addOnCompleteListener(task -> {
+                    if (!task.isSuccessful() || task.getResult() == null || task.getResult().getUser() == null) {
+                        callback.complete("Firebase sign-in failed. Please sign in again.");
+                        return;
+                    }
+                    prefs(context).edit().remove("token").apply();
+                    callback.complete(null);
+                });
+            });
+        });
     }
 
     private static void saveProfile(Context context, JSONObject profile, String legacyToken) {
@@ -94,6 +120,7 @@ public final class CustomerSession {
                 .putString("name", profile.optString("name", "Customer"))
                 .putString("phone", profile.optString("phone", ""))
                 .putString("email", profile.optString("email", ""));
+        if (profile.has("profileImageUrl")) editor.putString("profileImageUrl", profile.optString("profileImageUrl", ""));
         if (legacyToken == null) editor.remove("token"); else editor.putString("token", legacyToken);
         editor.apply();
     }

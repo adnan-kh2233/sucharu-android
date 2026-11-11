@@ -42,6 +42,7 @@ import androidx.annotation.Nullable;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.fragment.app.Fragment;
+import com.example.sucharu.databinding.FragmentBookingsBinding;
 import androidx.core.content.FileProvider;
 
 import com.google.android.material.card.MaterialCardView;
@@ -63,6 +64,7 @@ import java.util.Locale;
 import java.text.SimpleDateFormat;
 
 public class BookingsFragment extends Fragment {
+    private FragmentBookingsBinding binding;
     private static final String[] PROGRESS_STATUSES = {
             "booking_received", "confirmed", "assigned", "on_the_way", "service_started", "awaiting_customer_confirmation", "completed"
     };
@@ -102,19 +104,20 @@ public class BookingsFragment extends Fragment {
     }
 
     @Nullable @Override public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
-        return inflater.inflate(R.layout.fragment_bookings, container, false);
+        binding = FragmentBookingsBinding.inflate(inflater, container, false);
+        return binding.getRoot();
     }
 
     @Override public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
-        bookingsScroll = view.findViewById(R.id.bookings_scroll);
-        status = view.findViewById(R.id.bookings_status);
-        trackingResult = view.findViewById(R.id.track_result);
-        list = view.findViewById(R.id.bookings_list);
-        bookingId = view.findViewById(R.id.track_booking_id);
-        phone = view.findViewById(R.id.track_phone);
-        view.findViewById(R.id.refresh_bookings).setOnClickListener(v -> loadBookings());
-        view.findViewById(R.id.open_notifications).setOnClickListener(v -> loadNotifications());
-        view.findViewById(R.id.track_button).setOnClickListener(v -> trackBooking());
+        bookingsScroll = binding.bookingsScroll;
+        status = binding.bookingsStatus;
+        trackingResult = binding.trackResult;
+        list = binding.bookingsList;
+        bookingId = binding.trackBookingId;
+        phone = binding.trackPhone;
+        binding.refreshBookings.setOnClickListener(v -> loadBookings());
+        binding.openNotifications.setOnClickListener(v -> loadNotifications());
+        binding.trackButton.setOnClickListener(v -> trackBooking());
         loadBookings();
     }
 
@@ -448,6 +451,8 @@ public class BookingsFragment extends Fragment {
             dialog.setContentView(root);
             dialog.setOnShowListener(ignored -> { Window window = dialog.getWindow(); if (window != null) { window.setBackgroundDrawableResource(android.R.color.transparent); window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT); } });
             Handler handler = new Handler(Looper.getMainLooper());
+            boolean[] polling = {false};
+            LivePartnerLocationRepository.Subscription[] liveSubscription = {null};
             Runnable[] poll = new Runnable[1];
             poll[0] = () -> {
                 if (!dialog.isShowing() || !isAdded()) return;
@@ -466,11 +471,48 @@ public class BookingsFragment extends Fragment {
                     handler.postDelayed(poll[0], 10000L);
                 });
             };
+            Runnable startPolling = () -> {
+                if (polling[0] || !dialog.isShowing()) return;
+                polling[0] = true;
+                if (liveSubscription[0] != null) { liveSubscription[0].remove(); liveSubscription[0] = null; }
+                poll[0].run();
+            };
             close.setOnClickListener(v -> dialog.dismiss());
-            dialog.setOnDismissListener(ignored -> { handler.removeCallbacks(poll[0]); map.stopLoading(); map.destroy(); });
+            dialog.setOnDismissListener(ignored -> {
+                handler.removeCallbacks(poll[0]);
+                if (liveSubscription[0] != null) liveSubscription[0].remove();
+                map.stopLoading(); map.destroy();
+            });
             dialog.show();
             map.loadDataWithBaseURL("https://unpkg.com/", trackingMapHtml(), "text/html", "UTF-8", null);
-            poll[0].run();
+            if (!LivePartnerLocationRepository.isConfigured()) {
+                startPolling.run();
+                return;
+            }
+            CustomerSession.ensureFirebaseCustomerSession(requireContext(), firebaseError -> {
+                if (!dialog.isShowing() || !isAdded()) return;
+                if (firebaseError != null) { startPolling.run(); return; }
+                try {
+                    liveSubscription[0] = LivePartnerLocationRepository.observe(bookingId, new LivePartnerLocationRepository.Listener() {
+                        @Override public void onLocation(double latitude, double longitude, int accuracy, long updatedAt) {
+                            if (!dialog.isShowing() || !isAdded()) return;
+                            long ageSeconds = Math.max(0, (System.currentTimeMillis() - updatedAt) / 1000L);
+                            String age = ageSeconds < 5 ? "just now" : ageSeconds + " seconds ago";
+                            updateText.setText("Live location updated " + age + (accuracy >= 0 ? " · accuracy about " + accuracy + " m" : ""));
+                            if (ready[0]) map.evaluateJavascript("window.updatePartnerPin(" + latitude + "," + longitude + ");", null);
+                        }
+                        @Override public void onWaiting() {
+                            if (dialog.isShowing()) updateText.setText("Waiting for the partner to share their location…");
+                        }
+                        @Override public void onError(String error) {
+                            if (dialog.isShowing()) {
+                                updateText.setText("Live updates are unavailable. Checking the secure API…");
+                                startPolling.run();
+                            }
+                        }
+                    });
+                } catch (Exception error) { startPolling.run(); }
+            });
         });
     }
 
@@ -560,6 +602,16 @@ public class BookingsFragment extends Fragment {
 
     private void addProofImage(LinearLayout parent, String heading, String encoded) {
         if (encoded == null || encoded.isEmpty()) return;
+        if (encoded.startsWith("https://firebasestorage.googleapis.com/")) {
+            parent.addView(Ui.text(requireContext(), heading, 13, Ui.GREEN, true), topMargin(12));
+            ImageView image = new ImageView(requireContext()); image.setImageResource(R.drawable.ic_profile_placeholder); image.setAdjustViewBounds(true); image.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, Ui.dp(requireContext(), 220)); params.topMargin = Ui.dp(requireContext(), 5); parent.addView(image, params);
+            CustomerSession.ensureFirebaseCustomerSession(requireContext(), error -> {
+                if (error == null && isAdded()) FirebaseImageStorage.loadInto(encoded, image, R.drawable.ic_profile_placeholder);
+                else if (isAdded()) Toast.makeText(requireContext(), "Sign in is required to view this service photo.", Toast.LENGTH_LONG).show();
+            });
+            return;
+        }
         try {
             byte[] bytes = android.util.Base64.decode(encoded, android.util.Base64.DEFAULT);
             Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
@@ -645,6 +697,8 @@ public class BookingsFragment extends Fragment {
                     } catch (Exception ignored) { }
                 }).show();
     }
+
+    @Override public void onDestroyView() { binding = null; super.onDestroyView(); }
 
     private void loadNotifications() {
         CustomerSession.withToken(requireContext(), (token, tokenError) -> {

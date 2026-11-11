@@ -11,6 +11,9 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
+import java.net.ConnectException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 
@@ -40,6 +43,7 @@ public final class ApiClient {
             String error = null;
             HttpURLConnection connection = null;
             try {
+                if (!ConnectivityMonitor.isConnected()) throw new java.net.UnknownHostException("No active internet connection.");
                 connection = (HttpURLConnection) new URL(BuildConfig.API_BASE_URL + path).openConnection();
                 connection.setRequestMethod(method);
                 connection.setConnectTimeout(15000);
@@ -66,9 +70,20 @@ public final class ApiClient {
                     if (text.startsWith("[")) array = new JSONArray(text);
                     else if (text.startsWith("{")) object = new JSONObject(text);
                 }
-                if (status < 200 || status >= 300) error = object == null ? "Request failed. Please try again." : object.optString("message", "Request failed. Please try again.");
+                if (status < 200 || status >= 300) {
+                    error = object == null ? "Request failed (HTTP " + status + "). Please try again." : object.optString("message", "Request failed (HTTP " + status + "). Please try again.");
+                    if (status == 401) error = "Your session has expired. Please sign in again.";
+                    else if (status == 429) error = object == null ? "Too many requests. Wait a moment and try again." : object.optString("message", "Too many requests. Wait a moment and try again.");
+                    else if (status >= 500) error = object == null ? "Sucharu server is waking up or temporarily unavailable. Please retry shortly." : object.optString("message", "Sucharu server is temporarily unavailable. Please retry shortly.");
+                }
+            } catch (SocketTimeoutException exception) {
+                error = "Sucharu is taking longer than usual to respond. The server may be waking up; try again shortly.";
+            } catch (UnknownHostException exception) {
+                error = "No internet connection is available. Reconnect and try again.";
+            } catch (ConnectException exception) {
+                error = "Could not reach Sucharu right now. Check your connection and retry shortly.";
             } catch (Exception exception) {
-                error = "Could not connect to Sucharu. Check the internet connection and try again.";
+                error = "Could not complete the request. Check your connection and try again.";
             } finally {
                 if (connection != null) connection.disconnect();
             }

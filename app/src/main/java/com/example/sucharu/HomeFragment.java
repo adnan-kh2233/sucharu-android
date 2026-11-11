@@ -2,25 +2,28 @@ package com.example.sucharu;
 
 import android.graphics.Color;
 import android.graphics.Rect;
-import android.content.res.ColorStateList;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.provider.Settings;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
-import android.widget.ScrollView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.fragment.app.Fragment;
-
-import com.google.android.material.card.MaterialCardView;
+import androidx.core.content.ContextCompat;
+import androidx.core.widget.NestedScrollView;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+import com.example.sucharu.databinding.FragmentHomeBinding;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import org.json.JSONArray;
@@ -31,30 +34,53 @@ import java.util.LinkedHashSet;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
-import java.text.NumberFormat;
 import java.util.Set;
 
-public class HomeFragment extends Fragment {
+public class HomeFragment extends Fragment implements SystemEventCallbacks, ConnectivityMonitor.Listener {
+    private FragmentHomeBinding binding;
     private final List<ServiceItem> catalog = new ArrayList<>();
     private final Set<String> favoriteIds = new HashSet<>();
     private static final String SAVED_FILTER = "__saved_services__";
-    private LinearLayout serviceList, filters;
+    private RecyclerView serviceList;
+    private LinearLayout filters;
+    private ServiceAdapter serviceAdapter;
     private EditText search;
-    private TextView status;
-    private ScrollView homeScroll;
+    private TextView status, emptyServices, systemBanner, serviceCoverage;
+    private NestedScrollView homeScroll;
     private String activeCategory = "All";
+    private boolean airplaneMode, batteryLow, networkAvailable;
+    private AirplaneModeReceiver airplaneReceiver;
+    private LowBatteryReceiver batteryReceiver;
+    private boolean receiversRegistered;
 
     @Nullable @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
-        return inflater.inflate(R.layout.fragment_home, container, false);
+        binding = FragmentHomeBinding.inflate(inflater, container, false);
+        return binding.getRoot();
     }
 
     @Override public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
-        serviceList = view.findViewById(R.id.service_list);
-        homeScroll = view.findViewById(R.id.home_scroll);
-        filters = view.findViewById(R.id.category_filters);
-        search = view.findViewById(R.id.service_search);
-        status = view.findViewById(R.id.catalog_status);
+        serviceList = binding.serviceList;
+        homeScroll = binding.homeScroll;
+        filters = binding.categoryFilters;
+        search = binding.serviceSearch;
+        status = binding.catalogStatus;
+        emptyServices = binding.emptyServices;
+        systemBanner = binding.systemStatusBanner;
+        serviceCoverage = binding.serviceCoverage;
+        serviceList.setLayoutManager(new LinearLayoutManager(requireContext()));
+        serviceList.setNestedScrollingEnabled(true);
+        serviceAdapter = new ServiceAdapter(requireContext(), new ServiceAdapter.Listener() {
+            @Override public void onRequest(ServiceItem item) { ((MainActivity) requireActivity()).requestBooking(item); }
+            @Override public void onDetails(ServiceItem item) { showServiceDetails(item); }
+            @Override public void onFavorite(ServiceItem item) { toggleFavorite(item); }
+        });
+        serviceList.setAdapter(serviceAdapter);
+        List<String> coverage = ServiceCoverageParser.parse(requireContext());
+        if (!coverage.isEmpty()) serviceCoverage.setText(android.text.TextUtils.join(" · ", coverage));
+        airplaneMode = Settings.Global.getInt(requireContext().getContentResolver(), Settings.Global.AIRPLANE_MODE_ON, 0) == 1;
+        networkAvailable = ConnectivityMonitor.isConnected();
+        renderSystemBanner();
         status.setOnClickListener(v -> loadCatalog());
         search.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
@@ -67,6 +93,46 @@ public class HomeFragment extends Fragment {
     @Override public void onResume() {
         super.onResume();
         loadFavorites();
+    }
+
+    @Override public void onStart() {
+        super.onStart();
+        if (!receiversRegistered) {
+            airplaneReceiver = new AirplaneModeReceiver(this);
+            batteryReceiver = new LowBatteryReceiver(this);
+            ContextCompat.registerReceiver(requireContext(), airplaneReceiver,
+                    new IntentFilter(Intent.ACTION_AIRPLANE_MODE_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED);
+            IntentFilter batteryFilter = new IntentFilter();
+            batteryFilter.addAction(Intent.ACTION_BATTERY_LOW);
+            batteryFilter.addAction(Intent.ACTION_BATTERY_OKAY);
+            ContextCompat.registerReceiver(requireContext(), batteryReceiver, batteryFilter, ContextCompat.RECEIVER_NOT_EXPORTED);
+            receiversRegistered = true;
+        }
+        ConnectivityMonitor.addListener(this);
+    }
+
+    @Override public void onStop() {
+        ConnectivityMonitor.removeListener(this);
+        if (receiversRegistered && getContext() != null) {
+            requireContext().unregisterReceiver(airplaneReceiver);
+            requireContext().unregisterReceiver(batteryReceiver);
+            receiversRegistered = false;
+        }
+        super.onStop();
+    }
+
+    @Override public void onAirplaneModeChanged(boolean enabled) { airplaneMode = enabled; renderSystemBanner(); }
+    @Override public void onBatteryLow(boolean low) { batteryLow = low; renderSystemBanner(); }
+    @Override public void onConnectivityChanged(boolean available) { networkAvailable = available; renderSystemBanner(); }
+
+    private void renderSystemBanner() {
+        if (systemBanner == null || !isAdded()) return;
+        String message = null;
+        if (!networkAvailable) message = "Internet unavailable. Service requests and account updates need a connection.";
+        else if (airplaneMode) message = "Airplane mode is on, but internet is available through another connection.";
+        else if (batteryLow) message = "Battery is low. Some devices may limit background activity.";
+        if (message == null) systemBanner.setVisibility(View.GONE);
+        else { systemBanner.setText(message); systemBanner.setVisibility(View.VISIBLE); }
     }
 
     public void scrollToTop() {
@@ -87,7 +153,7 @@ public class HomeFragment extends Fragment {
     private void loadCatalog() {
         status.setText("Loading service catalog…");
         ApiClient.get("/services", null, (code, object, array, error) -> {
-            if (!isAdded()) return;
+            if (!isAdded() || binding == null) return;
             catalog.clear();
             if (array != null) {
                 for (int i = 0; i < array.length(); i++) {
@@ -97,7 +163,8 @@ public class HomeFragment extends Fragment {
             }
             if (error != null || catalog.isEmpty()) {
                 status.setText(error == null ? "No services are available right now." : error + "  Tap to retry.");
-                serviceList.removeAllViews();
+                serviceAdapter.submitItems(new ArrayList<>());
+                emptyServices.setVisibility(View.GONE);
                 filters.removeAllViews();
                 return;
             }
@@ -117,7 +184,7 @@ public class HomeFragment extends Fragment {
         CustomerSession.withToken(requireContext(), (token, tokenError) -> {
             if (tokenError != null || !isAdded()) return;
             ApiClient.get("/customers/favorites", token, (code, object, rows, error) -> {
-                if (!isAdded() || error != null) return;
+                if (!isAdded() || binding == null || error != null) return;
                 favoriteIds.clear();
                 if (rows != null) for (int i = 0; i < rows.length(); i++) {
                     JSONObject row = rows.optJSONObject(i);
@@ -160,80 +227,25 @@ public class HomeFragment extends Fragment {
     }
 
     private void renderServices() {
-        if (!isAdded() || serviceList == null) return;
-        serviceList.removeAllViews();
+        if (!isAdded() || binding == null || serviceList == null || serviceAdapter == null) return;
         String query = search.getText().toString().trim().toLowerCase(Locale.ROOT);
-        int count = 0;
+        List<ServiceItem> visibleItems = new ArrayList<>();
         for (ServiceItem item : catalog) {
             boolean matchesCategory = "All".equals(activeCategory)
                     || (SAVED_FILTER.equals(activeCategory) ? favoriteIds.contains(item.id) : item.category.equals(activeCategory));
             String haystack = (item.name + " " + item.category + " " + item.description).toLowerCase(Locale.ROOT);
             if (!matchesCategory || !haystack.contains(query)) continue;
-            serviceList.addView(serviceCard(item));
-            count++;
+            visibleItems.add(item);
         }
-        if (count == 0 && !catalog.isEmpty()) {
+        serviceAdapter.submitItems(visibleItems);
+        serviceAdapter.setFavoriteIds(favoriteIds);
+        if (visibleItems.isEmpty() && !catalog.isEmpty()) {
             String emptyMessage = SAVED_FILTER.equals(activeCategory) ? "No saved services yet. Tap the heart on a service to save it." : "No matching services. Try another search.";
-            TextView empty = Ui.text(requireContext(), emptyMessage, 14, Ui.MUTED, false);
-            empty.setPadding(Ui.dp(requireContext(), 4), Ui.dp(requireContext(), 12), Ui.dp(requireContext(), 4), Ui.dp(requireContext(), 20));
-            serviceList.addView(empty);
+            emptyServices.setText(emptyMessage);
+            emptyServices.setVisibility(View.VISIBLE);
+        } else {
+            emptyServices.setVisibility(View.GONE);
         }
-    }
-
-    private View serviceCard(ServiceItem item) {
-        MaterialCardView card = Ui.card(requireContext());
-        LinearLayout content = new LinearLayout(requireContext());
-        content.setOrientation(LinearLayout.VERTICAL);
-        content.setPadding(Ui.dp(requireContext(), 17), Ui.dp(requireContext(), 16), Ui.dp(requireContext(), 17), Ui.dp(requireContext(), 14));
-        card.addView(content);
-        LinearLayout topRow = new LinearLayout(requireContext());
-        topRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
-        TextView category = Ui.text(requireContext(), item.icon + "  " + item.category.toUpperCase(Locale.ROOT), 11, Ui.GREEN, true);
-        topRow.addView(category, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView favorite = Ui.text(requireContext(), favoriteIds.contains(item.id) ? "♥" : "♡", 25,
-                favoriteIds.contains(item.id) ? Color.rgb(201, 72, 91) : Ui.MUTED, true);
-        favorite.setGravity(android.view.Gravity.CENTER);
-        favorite.setContentDescription(favoriteIds.contains(item.id) ? "Remove from saved services" : "Save service");
-        favorite.setPadding(Ui.dp(requireContext(), 8), 0, Ui.dp(requireContext(), 4), 0);
-        favorite.setOnClickListener(v -> toggleFavorite(item));
-        topRow.addView(favorite, new LinearLayout.LayoutParams(-2, Ui.dp(requireContext(), 38)));
-        content.addView(topRow);
-        TextView name = Ui.text(requireContext(), item.name, 19, Ui.INK, true);
-        LinearLayout.LayoutParams nameParams = new LinearLayout.LayoutParams(-1, -2);
-        nameParams.topMargin = Ui.dp(requireContext(), 5);
-        content.addView(name, nameParams);
-        if (!item.description.isEmpty()) {
-            TextView description = Ui.text(requireContext(), item.description, 13, Ui.MUTED, false);
-            LinearLayout.LayoutParams descParams = new LinearLayout.LayoutParams(-1, -2);
-            descParams.topMargin = Ui.dp(requireContext(), 5);
-            content.addView(description, descParams);
-        }
-        String priceText = item.startingPrice == null
-                ? "QUOTE REQUIRED"
-                : "STARTING AT  ৳" + NumberFormat.getIntegerInstance(Locale.forLanguageTag("en-BD")).format(item.startingPrice);
-        TextView price = Ui.text(requireContext(), priceText, 15, Ui.GREEN, true);
-        LinearLayout.LayoutParams priceParams = new LinearLayout.LayoutParams(-1, -2);
-        priceParams.topMargin = Ui.dp(requireContext(), 9);
-        content.addView(price, priceParams);
-        LinearLayout actions = new LinearLayout(requireContext());
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        Button book = new Button(requireContext());
-        book.setText("Request service"); book.setAllCaps(false); book.setTextColor(Color.WHITE);
-        book.setBackgroundTintList(ColorStateList.valueOf(Ui.GREEN));
-        book.setOnClickListener(v -> ((MainActivity) requireActivity()).requestBooking(item));
-        Button details = new Button(requireContext());
-        details.setText("Details"); details.setAllCaps(false);
-        details.setOnClickListener(v -> showServiceDetails(item));
-        LinearLayout.LayoutParams actionParams = new LinearLayout.LayoutParams(0, -2, 1);
-        actionParams.topMargin = Ui.dp(requireContext(), 5);
-        actionParams.rightMargin = Ui.dp(requireContext(), 4);
-        actions.addView(book, actionParams);
-        LinearLayout.LayoutParams detailsParams = new LinearLayout.LayoutParams(0, -2, 1);
-        detailsParams.topMargin = Ui.dp(requireContext(), 5);
-        detailsParams.leftMargin = Ui.dp(requireContext(), 4);
-        actions.addView(details, detailsParams);
-        content.addView(actions);
-        return card;
     }
 
     private void showServiceDetails(ServiceItem item) {
@@ -275,5 +287,19 @@ public class HomeFragment extends Fragment {
             if (removing) ApiClient.delete(path, token, callback);
             else ApiClient.put(path, new JSONObject(), token, callback);
         });
+    }
+
+    @Override public void onDestroyView() {
+        binding = null;
+        serviceList = null;
+        filters = null;
+        serviceAdapter = null;
+        search = null;
+        status = null;
+        emptyServices = null;
+        systemBanner = null;
+        serviceCoverage = null;
+        homeScroll = null;
+        super.onDestroyView();
     }
 }

@@ -33,6 +33,9 @@ import androidx.core.content.ContextCompat;
 import com.google.android.material.card.MaterialCardView;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.firebase.messaging.FirebaseMessaging;
+import com.google.firebase.auth.FirebaseAuth;
+import com.google.firebase.FirebaseApp;
+import com.google.firebase.storage.FirebaseStorage;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -888,7 +891,7 @@ public class StaffPortalActivity extends AppCompatActivity {
         androidx.appcompat.app.AlertDialog dialog = new MaterialAlertDialogBuilder(this).setTitle("Service completion report").setView(scroll).setNegativeButton("Keep working", null).setPositiveButton("Complete booking", null).create();
         dialog.setOnShowListener(ignored -> dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
             if (!workCompleted.isChecked() || !areaChecked.isChecked() || !followUpExplained.isChecked()) { toast("Confirm all checklist items before completing the booking."); return; }
-            if ((beforePhotoStatus != null && beforePhotoStatus.getText().toString().startsWith("Preparing")) || (afterPhotoStatus != null && afterPhotoStatus.getText().toString().startsWith("Preparing"))) { toast("Wait for the selected photo to finish compressing."); return; }
+            if (isPhotoUploadInProgress(beforePhotoStatus) || isPhotoUploadInProgress(afterPhotoStatus)) { toast("Wait for the selected photo upload to finish."); return; }
             JSONObject checklist = new JSONObject(), body = new JSONObject();
             try {
                 checklist.put("workCompleted", true); checklist.put("areaChecked", true); checklist.put("followUpExplained", true);
@@ -910,55 +913,53 @@ public class StaffPortalActivity extends AppCompatActivity {
         if (uri == null || pendingCompletionBookingId == null) return;
         final String bookingId = pendingCompletionBookingId;
         TextView target = before ? beforePhotoStatus : afterPhotoStatus;
-        if (target != null) target.setText("Preparing photo…");
-        new Thread(() -> {
-            String encoded = compressCompletionPhoto(uri);
-            runOnUiThread(() -> {
-                if (!bookingId.equals(pendingCompletionBookingId)) return;
-                if (encoded == null) {
-                    if (target != null) target.setText("Photo too large or unreadable. Choose another one.");
+        if (target != null) target.setText("Preparing photo upload…");
+        ApiClient.post("/partner/firebase-session", new JSONObject(), token, (code, response, rows, error) -> {
+            if (isFinishing() || !bookingId.equals(pendingCompletionBookingId)) return;
+            String customToken = response == null ? "" : response.optString("firebaseCustomToken", "");
+            if (error != null || code < 200 || code >= 300 || customToken.isEmpty()) {
+                if (target != null) target.setText(error == null ? "Firebase upload session unavailable." : error);
+                return;
+            }
+            FirebaseApp resolvedPartnerFirebaseApp;
+            try { resolvedPartnerFirebaseApp = FirebaseApp.getInstance("sucharu_partner_storage"); }
+            catch (IllegalStateException missing) {
+                try { resolvedPartnerFirebaseApp = FirebaseApp.initializeApp(this, FirebaseApp.getInstance().getOptions(), "sucharu_partner_storage"); }
+                catch (Exception initError) { if (target != null) target.setText("Firebase photo upload is unavailable."); return; }
+            }
+            final FirebaseApp partnerFirebaseApp = resolvedPartnerFirebaseApp;
+            FirebaseAuth partnerFirebaseAuth = FirebaseAuth.getInstance(partnerFirebaseApp);
+            partnerFirebaseAuth.signInWithCustomToken(customToken).addOnCompleteListener(task -> {
+                if (!task.isSuccessful() || task.getResult() == null || task.getResult().getUser() == null) {
+                    if (target != null) target.setText("Could not authenticate photo upload.");
                     return;
                 }
-                if (before) completionBeforeImage = encoded; else completionAfterImage = encoded;
-                if (target != null) target.setText("Photo ready · compressed for upload");
+                String partnerId = task.getResult().getUser().getUid();
+                String kind = before ? "before" : "after";
+                String path = "partners/" + partnerId + "/bookings/" + bookingId + "/completion/" + kind + "-" + java.util.UUID.randomUUID() + ".jpg";
+                FirebaseImageStorage.upload(FirebaseStorage.getInstance(partnerFirebaseApp), this, uri, path, new FirebaseImageStorage.UploadListener() {
+                    @Override public void onProgress(int percent) {
+                        runOnUiThread(() -> { if (bookingId.equals(pendingCompletionBookingId) && target != null) target.setText("Uploading photo… " + percent + "%"); });
+                    }
+                    @Override public void onFailure(Exception uploadError) {
+                        runOnUiThread(() -> { if (bookingId.equals(pendingCompletionBookingId) && target != null) target.setText(uploadError.getMessage() == null ? "Photo upload failed. Try again." : uploadError.getMessage()); });
+                    }
+                    @Override public void onSuccess(String downloadUrl) {
+                        runOnUiThread(() -> {
+                            if (!bookingId.equals(pendingCompletionBookingId)) return;
+                            if (before) completionBeforeImage = downloadUrl; else completionAfterImage = downloadUrl;
+                            if (target != null) target.setText("Photo uploaded securely.");
+                        });
+                    }
+                });
             });
-        }, "sucharu-photo-compress").start();
+        });
     }
 
-    private String compressCompletionPhoto(Uri uri) {
-        try {
-            BitmapFactory.Options bounds = new BitmapFactory.Options(); bounds.inJustDecodeBounds = true;
-            try (InputStream input = getContentResolver().openInputStream(uri)) { BitmapFactory.decodeStream(input, null, bounds); }
-            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null;
-            int sample = 1; while (bounds.outWidth / sample > 1280 || bounds.outHeight / sample > 1280) sample *= 2;
-            BitmapFactory.Options options = new BitmapFactory.Options(); options.inSampleSize = sample;
-            Bitmap bitmap;
-            try (InputStream input = getContentResolver().openInputStream(uri)) { bitmap = BitmapFactory.decodeStream(input, null, options); }
-            if (bitmap == null) return null;
-            int max = Math.max(bitmap.getWidth(), bitmap.getHeight());
-            if (max > 800) {
-                float scale = 800f / max;
-                Bitmap scaled = Bitmap.createScaledBitmap(bitmap, Math.round(bitmap.getWidth() * scale), Math.round(bitmap.getHeight() * scale), true);
-                if (scaled != bitmap) bitmap.recycle(); bitmap = scaled;
-            }
-            for (int maxDimension = 800; maxDimension >= 250; maxDimension = Math.round(maxDimension * .75f)) {
-                Bitmap working = bitmap;
-                int workingMax = Math.max(bitmap.getWidth(), bitmap.getHeight());
-                if (workingMax > maxDimension) {
-                    float scale = (float) maxDimension / workingMax;
-                    working = Bitmap.createScaledBitmap(bitmap, Math.round(bitmap.getWidth() * scale), Math.round(bitmap.getHeight() * scale), true);
-                }
-                for (int quality = 82; quality >= 40; quality -= 7) {
-                    ByteArrayOutputStream output = new ByteArrayOutputStream(); working.compress(Bitmap.CompressFormat.JPEG, quality, output);
-                    if (output.size() <= 150 * 1024) {
-                        String result = android.util.Base64.encodeToString(output.toByteArray(), android.util.Base64.NO_WRAP);
-                        if (working != bitmap) working.recycle(); bitmap.recycle(); return result;
-                    }
-                }
-                if (working != bitmap) working.recycle();
-            }
-            bitmap.recycle(); return null;
-        } catch (Exception ignored) { return null; }
+    private boolean isPhotoUploadInProgress(TextView status) {
+        if (status == null) return false;
+        String value = status.getText().toString();
+        return value.startsWith("Preparing") || value.startsWith("Uploading");
     }
 
     private boolean isLocationSharing(String bookingId) {
